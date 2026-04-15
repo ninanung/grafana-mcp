@@ -19,6 +19,10 @@ import { handleListServices } from "@/tools/list-services.js";
 import type { ListServicesArgs } from "@/tools/list-services.js";
 import { handleQueryLogs } from "@/tools/query-logs.js";
 import {
+  handleExtractDashboardQueries,
+  type ExtractDashboardQueriesArgs,
+} from "@/tools/extract-dashboard-queries.js";
+import {
   handleGetLogCache,
   handleRefreshLogCache,
   handleExportLogCache,
@@ -68,6 +72,19 @@ export function getToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: {
           uid: { type: "string", description: "Dashboard uid" },
+        },
+        required: ["uid"],
+      },
+    },
+    {
+      name: "extract_dashboard_queries",
+      description:
+        "Extract all panel queries from a dashboard. Each entry has panel_id, panel_title, datasource_uid, datasource_type, expr, and is_log_query. Use this to discover the LogQL/datasource_uid behind a Grafana dashboard URL, then feed expr into query_logs.raw_logql.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          uid: { type: "string", description: "Dashboard uid (the path segment after /d/ in the URL)." },
+          log_only: { type: "boolean", description: "If true, return only queries against log datasources." },
         },
         required: ["uid"],
       },
@@ -228,6 +245,8 @@ export async function handleToolCall(
       return handleSearchDashboards(args as unknown as SearchDashboardsArgs, client);
     case "get_dashboard":
       return handleGetDashboard(args as unknown as GetDashboardArgs, client);
+    case "extract_dashboard_queries":
+      return handleExtractDashboardQueries(args as unknown as ExtractDashboardQueriesArgs, client);
     case "list_log_datasources":
       return handleListLogDataSources(client, cache);
     case "list_services":
