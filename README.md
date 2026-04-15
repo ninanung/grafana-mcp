@@ -91,13 +91,14 @@ All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server 
 
 | Tool | Description |
 |------|-------------|
-| `self_test` | Diagnostic check — verifies Grafana connectivity, version, and the selected auth method |
+| `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `proxy_uid`, `ds_query`) with guidance on which arguments are required |
 | `list_datasources` | List all configured datasources |
 | `search_dashboards` | Search dashboards by query/tag/type |
 | `get_dashboard` | Fetch a dashboard's full JSON by uid |
+| `extract_dashboard_queries` | Extract panel queries (LogQL/PromQL) from a dashboard, with `datasource_uid`. Use to discover args for `query_logs.raw_logql` from a dashboard URL |
 | `list_log_datasources` | List only log-type datasources (Loki, Elasticsearch, CloudWatch, OpenSearch, Splunk). Cached |
 | `list_services` | List service names discoverable from Loki labels — useful before calling `query_logs` |
-| `query_logs` | Query logs for a service/time-range/level. Auto-detects the log datasource and service label. Output mode selectable: `raw` / `summarize` / `json` |
+| `query_logs` | Query logs for a service/time-range/level. Auto-detects the log datasource and service label. Supports `raw_logql` for multi-label/advanced selectors. Falls back to `/api/ds/query` when uid-proxy is unavailable (Grafana <9.0). Output mode: `raw` / `summarize` / `json` |
 | `get_log_cache` | Inspect what is currently cached (log datasources, labels, resolved services) |
 | `refresh_log_cache` | Invalidate one service's resolution or clear all entries for the Grafana instance |
 | `export_log_cache` | Export the log cache to a JSON file |
