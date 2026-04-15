@@ -176,14 +176,20 @@ async function queryLokiViaDsQuery(
   if (result.error) throw new Error(`Loki query error: ${result.error}`);
 
   const out: LogLine[] = [];
+  const unmatchedSchemas: string[][] = [];
   for (const frame of result.frames ?? []) {
     const labels = parseStreamLabels(frame.schema?.name);
     const fields = frame.schema?.fields ?? [];
     const values = frame.data?.values ?? [];
-    const timeIdx = fields.findIndex((f) => f.name === "Time" || f.name === "timestamp");
-    const lineIdx = fields.findIndex((f) => f.name === "Line" || f.name === "line");
-    const tsNsIdx = fields.findIndex((f) => f.name === "tsNs" || f.name === "TS");
-    if (timeIdx < 0 || lineIdx < 0) continue;
+    const nameEq = (names: string[]) => (f: { name: string }) =>
+      names.includes(f.name.toLowerCase());
+    const timeIdx = fields.findIndex(nameEq(["time", "timestamp"]));
+    const lineIdx = fields.findIndex(nameEq(["line", "value", "body"]));
+    const tsNsIdx = fields.findIndex(nameEq(["tsns", "ts"]));
+    if (timeIdx < 0 || lineIdx < 0) {
+      unmatchedSchemas.push(fields.map((f) => f.name));
+      continue;
+    }
     const times = values[timeIdx] as number[];
     const lines = values[lineIdx] as string[];
     const tsNsCol = tsNsIdx >= 0 ? (values[tsNsIdx] as string[]) : undefined;
@@ -197,6 +203,14 @@ async function queryLokiViaDsQuery(
         labels,
       });
     }
+  }
+  if (out.length === 0 && unmatchedSchemas.length > 0) {
+    const samples = unmatchedSchemas.slice(0, 3).map((s) => `[${s.join(", ")}]`).join(" ");
+    throw new Error(
+      `Loki ds_query returned frames but no recognizable time/line fields. Observed field names: ${samples}. ` +
+        `The MCP parser expects names in {time,timestamp}/{line,value,body}. This likely indicates an unsupported Grafana/Loki response schema — ` +
+        `search for "Grafana Loki ds_query response schema <your-version>" to identify the correct field names and file an update.`
+    );
   }
   out.sort((a, b) => (a.timestampNs < b.timestampNs ? 1 : -1));
   return out.slice(0, limit);
