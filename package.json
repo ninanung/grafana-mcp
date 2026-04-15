@@ -1,6 +1,6 @@
 {
   "name": "@seungje.jun/grafana-mcp",
-  "version": "0.1.0",
+  "version": "0.0.1-beta.0",
   "description": "Grafana MCP server with multi-auth support (Service Account / API Key / Cloud / Basic)",
   "keywords": [
     "grafana",
