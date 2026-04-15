@@ -45,9 +45,10 @@ async function resolveTarget(
   cache?: LogCache
 ): Promise<ResolvedTarget> {
   const url = client.getBaseUrl();
+  const service = args.service as string;
 
   if (!args.refresh && !args.datasource_uid && !args.service_label) {
-    const cached = cache?.getServiceResolution(url, args.service);
+    const cached = cache?.getServiceResolution(url, service);
     if (cached) {
       const synthetic: GrafanaDataSource = {
         uid: cached.dsUid,
@@ -86,13 +87,13 @@ async function resolveTarget(
   const lokiCandidates = candidates.filter((d) => d.type === "loki");
   if (lokiCandidates.length === 0) {
     throw new Error(
-      `Auto-detection currently supports Loki only. Found types: ${candidates.map((c) => c.type).join(", ")}. Specify datasource_uid and service_label manually, or open a request for backend support.`
+      `Auto-detection currently supports Loki only. Found types: ${candidates.map((c) => c.type).join(", ")}. Specify datasource_uid and args.service_label manually, or open a request for backend support.`
     );
   }
 
   if (args.service_label) {
     const ds = lokiCandidates[0];
-    cache?.setServiceResolution(url, args.service, ds.uid, args.service_label);
+    cache?.setServiceResolution(url, service, ds.uid, args.service_label);
     return { datasource: ds, serviceLabel: args.service_label, fromCache: false };
   }
 
@@ -100,10 +101,10 @@ async function resolveTarget(
   for (const ds of lokiCandidates) {
     let label: string | null | undefined;
     try {
-      label = await detectServiceLabel(client, ds.uid, args.service, startMs, endMs, cache);
+      label = await detectServiceLabel(client, ds.uid, service, startMs, endMs, cache);
     } catch (err) {
       if (isPermissionError(err) || isProxyUidUnsupported(err)) {
-        throw new Error(permissionHint("list_services", "service_label"));
+        throw new Error(permissionHint("list_services", "args.service_label"));
       }
       throw err;
     }
@@ -114,7 +115,7 @@ async function resolveTarget(
     const suggestions = await collectSuggestions(
       client,
       lokiCandidates.map((d) => d.uid),
-      args.service,
+      service,
       startMs,
       endMs,
       cache
@@ -123,7 +124,7 @@ async function resolveTarget(
       ? ` Did you mean: ${suggestions.join(", ")}?`
       : "";
     throw new Error(
-      `Service "${args.service}" not found in any Loki datasource labels in the given time range.${hint} Try a wider time_from, run list_services, or verify the service name.`
+      `Service "${service}" not found in any Loki datasource labels in the given time range.${hint} Try a wider time_from, run list_services, or verify the service name.`
     );
   }
   if (matches.length > 1) {
@@ -131,11 +132,11 @@ async function resolveTarget(
       .map((m) => `${m.datasource.name} (uid=${m.datasource.uid}, label=${m.serviceLabel})`)
       .join(", ");
     throw new Error(
-      `Service "${args.service}" matches multiple datasources: ${names}. Specify datasource_uid to disambiguate.`
+      `Service "${service}" matches multiple datasources: ${names}. Specify datasource_uid to disambiguate.`
     );
   }
   const picked = matches[0];
-  cache?.setServiceResolution(url, args.service, picked.datasource.uid, picked.serviceLabel);
+  cache?.setServiceResolution(url, service, picked.datasource.uid, picked.serviceLabel);
   return { ...picked, fromCache: false };
 }
 
@@ -211,9 +212,15 @@ export async function handleQueryLogs(
   client: GrafanaClient,
   cache?: LogCache
 ): Promise<ToolResult> {
-  if (!args.service) {
+  if (!args.service && !args.raw_logql) {
     return {
-      content: [{ type: "text", text: "service is required." }],
+      content: [{ type: "text", text: "Provide either `service` (auto-build LogQL) or `raw_logql` (pass LogQL as-is)." }],
+      isError: true,
+    };
+  }
+  if (args.raw_logql && !args.datasource_uid) {
+    return {
+      content: [{ type: "text", text: "`raw_logql` requires `datasource_uid` (no auto-detection without a service name)." }],
       isError: true,
     };
   }
@@ -231,38 +238,48 @@ export async function handleQueryLogs(
   const limit = args.limit ?? 100;
   const output = args.output ?? "raw";
 
-  let target: ResolvedTarget;
-  try {
-    target = await resolveTarget(client, args, startMs, endMs, cache);
-  } catch (err) {
-    // invalidate stale service resolution on failure, let the next call re-detect
-    if (cache) cache.invalidateService(client.getBaseUrl(), args.service);
-    throw err;
-  }
+  let logql: string;
+  let dsUid: string;
+  let dsName: string;
+  let dsType: string;
+  let selectorLine: string;
+  let fromCache = false;
 
-  const logql = buildLogQL(target.serviceLabel, args.service, args.level, args.keyword);
+  if (args.raw_logql) {
+    logql = args.raw_logql;
+    dsUid = args.datasource_uid as string;
+    dsName = dsUid;
+    dsType = "loki";
+    selectorLine = "selector: (raw_logql)";
+  } else {
+    let target: ResolvedTarget;
+    try {
+      target = await resolveTarget(client, args, startMs, endMs, cache);
+    } catch (err) {
+      if (cache && args.service) cache.invalidateService(client.getBaseUrl(), args.service);
+      throw err;
+    }
+    logql = buildLogQL(target.serviceLabel, args.service as string, args.level, args.keyword);
+    dsUid = target.datasource.uid;
+    dsName = target.datasource.name;
+    dsType = target.datasource.type;
+    selectorLine = `selector: ${target.serviceLabel}="${args.service}"`;
+    fromCache = target.fromCache;
+  }
 
   let lines: LogLine[];
   try {
-    lines = await queryLokiRange(
-      client,
-      target.datasource.uid,
-      logql,
-      startMs,
-      endMs,
-      limit
-    );
+    lines = await queryLokiRange(client, dsUid, logql, startMs, endMs, limit);
   } catch (err) {
-    // cached resolution might be stale; drop it so the next call re-detects
-    if (target.fromCache && cache) {
+    if (fromCache && cache && args.service) {
       cache.invalidateService(client.getBaseUrl(), args.service);
     }
     throw err;
   }
 
   const header = [
-    `datasource: ${target.datasource.name} (uid=${target.datasource.uid}, type=${target.datasource.type})${target.fromCache ? " [cached]" : " [fresh]"}`,
-    `selector: ${target.serviceLabel}="${args.service}"`,
+    `datasource: ${dsName} (uid=${dsUid}, type=${dsType})${fromCache ? " [cached]" : " [fresh]"}`,
+    selectorLine,
     `logql: ${logql}`,
     `range: ${new Date(startMs).toISOString()} → ${new Date(endMs).toISOString()}`,
     `returned: ${lines.length} line(s)`,

@@ -144,8 +144,12 @@ export function getToolDefinitions(): ToolDefinition[] {
             type: "boolean",
             description: "If true, bypass cached service resolution and re-detect.",
           },
+          raw_logql: {
+            type: "string",
+            description:
+              "Escape hatch: pass a full LogQL expression (e.g. '{namespace=\"x\", container=\"y\"} |= \"err\"'). When set, service/service_label detection is skipped and `datasource_uid` is required. Use this for multi-label selectors or advanced queries.",
+          },
         },
-        required: ["service"],
       },
     },
     {

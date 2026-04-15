@@ -24,7 +24,7 @@ export interface QueryDataSourceArgs {
 export type LogOutputMode = "raw" | "summarize" | "json";
 
 export interface QueryLogsArgs {
-  service: string;
+  service?: string;
   datasource_uid?: string;
   service_label?: string;
   level?: string;
@@ -34,6 +34,7 @@ export interface QueryLogsArgs {
   limit?: number;
   output?: LogOutputMode;
   refresh?: boolean;
+  raw_logql?: string;
 }
 
 export interface GetLogCacheArgs {
