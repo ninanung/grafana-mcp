@@ -2,6 +2,7 @@ import type { GrafanaClient } from "@/grafana-client.js";
 import type { ToolResult } from "@/interfaces/tools.js";
 import type { LogCache } from "@/log-cache.js";
 import { LOG_DATASOURCE_TYPES } from "@/log-backends.js";
+import { isPermissionError, permissionHint } from "@/permission-error.js";
 
 export async function handleListLogDataSources(
   client: GrafanaClient,
@@ -9,8 +10,23 @@ export async function handleListLogDataSources(
 ): Promise<ToolResult> {
   const url = client.getBaseUrl();
   const cached = cache?.getLogDatasources(url);
-  const sources = cached ?? (await client.listDataSources()).filter((d) => LOG_DATASOURCE_TYPES.has(d.type));
-  if (!cached && cache) cache.setLogDatasources(url, sources);
+  let sources;
+  if (cached) {
+    sources = cached;
+  } else {
+    try {
+      sources = (await client.listDataSources()).filter((d) => LOG_DATASOURCE_TYPES.has(d.type));
+    } catch (err) {
+      if (isPermissionError(err)) {
+        return {
+          content: [{ type: "text", text: permissionHint("list_datasources", "datasource_uid") }],
+          isError: true,
+        };
+      }
+      throw err;
+    }
+    if (cache) cache.setLogDatasources(url, sources);
+  }
 
   const summary = sources.map((d) => ({
     uid: d.uid,

@@ -115,6 +115,13 @@ export class GrafanaClient {
     return this.request<GrafanaDataSource[]>("GET", "/api/datasources");
   }
 
+  getDataSourceByUid(uid: string): Promise<GrafanaDataSource> {
+    return this.request<GrafanaDataSource>(
+      "GET",
+      `/api/datasources/uid/${encodeURIComponent(uid)}`
+    );
+  }
+
   searchDashboards(params: {
     query?: string;
     tag?: string[];

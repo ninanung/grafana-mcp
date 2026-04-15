@@ -3,6 +3,7 @@ import type { ToolResult } from "@/interfaces/tools.js";
 import type { LogCache } from "@/log-cache.js";
 import { LOG_DATASOURCE_TYPES, SERVICE_LABEL_CANDIDATES, parseTime } from "@/log-backends.js";
 import { fetchLabelValues, fetchLokiLabels } from "@/loki.js";
+import { isPermissionError, permissionHint } from "@/permission-error.js";
 
 export interface ListServicesArgs {
   datasource_uid?: string;
@@ -22,9 +23,25 @@ export async function handleListServices(
 
   let logSources = cache?.getLogDatasources(url);
   if (!logSources) {
-    const all = await client.listDataSources();
-    logSources = all.filter((d) => LOG_DATASOURCE_TYPES.has(d.type));
-    cache?.setLogDatasources(url, logSources);
+    if (args.datasource_uid) {
+      logSources = [
+        { uid: args.datasource_uid, name: args.datasource_uid, type: "loki" } as never,
+      ];
+    } else {
+      try {
+        const all = await client.listDataSources();
+        logSources = all.filter((d) => LOG_DATASOURCE_TYPES.has(d.type));
+        cache?.setLogDatasources(url, logSources);
+      } catch (err) {
+        if (isPermissionError(err)) {
+          return {
+            content: [{ type: "text", text: permissionHint("list_datasources", "datasource_uid") }],
+            isError: true,
+          };
+        }
+        throw err;
+      }
+    }
   }
 
   const lokiSources = logSources.filter((d) => d.type === "loki");

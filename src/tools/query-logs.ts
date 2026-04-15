@@ -13,6 +13,7 @@ import {
   queryLokiRange,
 } from "@/loki.js";
 import { suggestClosest } from "@/fuzzy-match.js";
+import { isPermissionError, isProxyUidUnsupported, permissionHint } from "@/permission-error.js";
 
 interface ResolvedTarget {
   datasource: GrafanaDataSource;
@@ -48,24 +49,38 @@ async function resolveTarget(
   if (!args.refresh && !args.datasource_uid && !args.service_label) {
     const cached = cache?.getServiceResolution(url, args.service);
     if (cached) {
-      const logs = await getLogDatasources(client, cache);
-      const ds = logs.find((d) => d.uid === cached.dsUid);
-      if (ds) {
-        return { datasource: ds, serviceLabel: cached.label, fromCache: true };
-      }
+      const synthetic: GrafanaDataSource = {
+        uid: cached.dsUid,
+        name: cached.dsUid,
+        type: "loki",
+      } as GrafanaDataSource;
+      return { datasource: synthetic, serviceLabel: cached.label, fromCache: true };
     }
   }
 
-  const logSources = await getLogDatasources(client, cache, args.refresh);
-  if (logSources.length === 0) {
-    throw new Error("No log-type datasources found on this Grafana instance.");
-  }
-
-  const candidates = args.datasource_uid
-    ? logSources.filter((d) => d.uid === args.datasource_uid)
-    : logSources;
-  if (candidates.length === 0) {
-    throw new Error(`datasource_uid ${args.datasource_uid} is not a log datasource.`);
+  let candidates: GrafanaDataSource[];
+  if (args.datasource_uid) {
+    candidates = [
+      {
+        uid: args.datasource_uid,
+        name: args.datasource_uid,
+        type: "loki",
+      } as GrafanaDataSource,
+    ];
+  } else {
+    let logSources: GrafanaDataSource[];
+    try {
+      logSources = await getLogDatasources(client, cache, args.refresh);
+    } catch (err) {
+      if (isPermissionError(err)) {
+        throw new Error(permissionHint("list_datasources", "datasource_uid"));
+      }
+      throw err;
+    }
+    if (logSources.length === 0) {
+      throw new Error("No log-type datasources found on this Grafana instance.");
+    }
+    candidates = logSources;
   }
 
   const lokiCandidates = candidates.filter((d) => d.type === "loki");
@@ -83,7 +98,15 @@ async function resolveTarget(
 
   const matches: Array<{ datasource: GrafanaDataSource; serviceLabel: string }> = [];
   for (const ds of lokiCandidates) {
-    const label = await detectServiceLabel(client, ds.uid, args.service, startMs, endMs, cache);
+    let label: string | null | undefined;
+    try {
+      label = await detectServiceLabel(client, ds.uid, args.service, startMs, endMs, cache);
+    } catch (err) {
+      if (isPermissionError(err) || isProxyUidUnsupported(err)) {
+        throw new Error(permissionHint("list_services", "service_label"));
+      }
+      throw err;
+    }
     if (label) matches.push({ datasource: ds, serviceLabel: label });
   }
 
