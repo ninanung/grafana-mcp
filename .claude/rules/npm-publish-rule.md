@@ -21,3 +21,24 @@
 
 - `npm publish` 본 명령 실행 전 (dry-run은 예외 — 계정 확인 없이 실행 가능)
 - `npm publish --tag ...`, `npm publish --access ...` 등 모든 publish 변형 명령
+
+## publish 커밋에 git tag 부여
+
+`npm publish`가 실제로 성공한 경우, **해당 publish가 포함된 커밋**(= publish 시점의 `HEAD`)에 `package.json`의 `version` 값을 기반으로 한 git tag를 반드시 부여한다.
+
+### 태그 네이밍
+
+- 정식 릴리즈: `v{version}` (예: `0.0.1` → `v0.0.1`, `1.2.3` → `v1.2.3`)
+- 프리릴리즈: `v{version}` 그대로 (예: `0.0.1-beta.0` → `v0.0.1-beta.0`)
+- `v` 접두사는 항상 붙인다
+
+### 절차
+
+1. `npm publish` 성공을 확인한다
+2. `git tag v{version}`으로 현재 HEAD에 태그를 단다 (이미 존재하면 사용자에게 중복 여부 확인)
+3. `git push origin v{version}`로 원격에 태그를 푸시한다
+4. publish에 해당하는 커밋이 아직 푸시되지 않은 상태라면 커밋도 함께 푸시한다
+
+### 이유
+
+publish된 버전이 실제 어느 커밋에서 나왔는지 git 히스토리로 역추적할 수 있어야 한다. npm registry만으로는 tarball의 커밋 해시를 알 수 없으므로, 태그가 유일한 연결고리가 된다. 롤백·hotfix 분기 생성·릴리즈 노트 자동화 모두 이 태그에 의존한다.
