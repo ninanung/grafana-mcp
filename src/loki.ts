@@ -94,6 +94,11 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export interface QueryLokiResult {
+  lines: LogLine[];
+  path: "proxy_uid" | "ds_query";
+}
+
 export async function queryLokiRange(
   client: GrafanaClient,
   dsUid: string,
@@ -101,7 +106,7 @@ export async function queryLokiRange(
   startMs: number,
   endMs: number,
   limit: number
-): Promise<LogLine[]> {
+): Promise<QueryLokiResult> {
   try {
     const res = await client.proxyGet<LokiQueryRangeResponse>(
       dsUid,
@@ -127,11 +132,11 @@ export async function queryLokiRange(
       }
     }
     out.sort((a, b) => (a.timestampNs < b.timestampNs ? 1 : -1));
-    return out.slice(0, limit);
+    return { lines: out.slice(0, limit), path: "proxy_uid" };
   } catch (err) {
     if (!isProxyUidUnsupported(err)) throw err;
-    // Fallback for Grafana <9.0 or environments where uid-proxy is unavailable.
-    return queryLokiViaDsQuery(client, dsUid, logql, startMs, endMs, limit);
+    const lines = await queryLokiViaDsQuery(client, dsUid, logql, startMs, endMs, limit);
+    return { lines, path: "ds_query" };
   }
 }
 

@@ -268,8 +268,11 @@ export async function handleQueryLogs(
   }
 
   let lines: LogLine[];
+  let queryPath: string;
   try {
-    lines = await queryLokiRange(client, dsUid, logql, startMs, endMs, limit);
+    const res = await queryLokiRange(client, dsUid, logql, startMs, endMs, limit);
+    lines = res.lines;
+    queryPath = res.path === "ds_query" ? "ds_query [fallback]" : "proxy_uid";
   } catch (err) {
     if (fromCache && cache && args.service) {
       cache.invalidateService(client.getBaseUrl(), args.service);
@@ -282,6 +285,7 @@ export async function handleQueryLogs(
     selectorLine,
     `logql: ${logql}`,
     `range: ${new Date(startMs).toISOString()} → ${new Date(endMs).toISOString()}`,
+    `path: ${queryPath}`,
     `returned: ${lines.length} line(s)`,
     "",
   ].join("\n");
