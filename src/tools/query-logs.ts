@@ -47,9 +47,9 @@ async function resolveTarget(
   const url = client.getBaseUrl();
   const service = args.service as string;
 
-  if (!args.refresh && !args.datasource_uid && !args.service_label) {
+  if (!args.refresh && !args.service_label) {
     const cached = cache?.getServiceResolution(url, service);
-    if (cached) {
+    if (cached && (!args.datasource_uid || cached.dsUid === args.datasource_uid)) {
       const synthetic: GrafanaDataSource = {
         uid: cached.dsUid,
         name: cached.dsUid,
