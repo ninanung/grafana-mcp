@@ -1,0 +1,43 @@
+{
+  "name": "@seungje.jun/grafana-mcp",
+  "version": "0.1.0",
+  "description": "Grafana MCP server with multi-auth support (Service Account / API Key / Cloud / Basic)",
+  "keywords": [
+    "grafana",
+    "mcp",
+    "model-context-protocol",
+    "dashboard",
+    "observability",
+    "claude",
+    "ai"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "grafana-mcp": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && tsc-alias && chmod +x dist/cli.js",
+    "lint": "eslint src/",
+    "start": "node dist/cli.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.58.1",
+    "@typescript-eslint/parser": "^8.58.1",
+    "eslint": "^10.2.0",
+    "tsc-alias": "^1.8.16",
+    "typescript": "^5.2.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
