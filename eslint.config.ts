@@ -1,7 +1,8 @@
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
+import type { Linter } from "eslint";
 
-export default [
+const config: Linter.Config[] = [
   {
     files: ["src/**/*.ts"],
     languageOptions: {
@@ -18,3 +19,5 @@ export default [
     },
   },
 ];
+
+export default config;
