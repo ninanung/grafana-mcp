@@ -9,13 +9,13 @@
 ```
 src/
   interfaces/
-    redash-client.ts    # RedashClient 관련 인터페이스
-    metadata-cache.ts   # MetadataCache 관련 인터페이스
-    schema-cache.ts     # SchemaCache 관련 인터페이스
+    grafana-client.ts   # GrafanaClient 관련 인터페이스
+    log-cache.ts        # LogCache 관련 인터페이스
+    loki.ts             # Loki 관련 인터페이스
     tools.ts            # Tool 관련 인터페이스
-  redash-client.ts      # 구현체
-  metadata-cache.ts     # 구현체
-  schema-cache.ts       # 구현체
+  grafana-client.ts     # 구현체
+  log-cache.ts          # 구현체
+  loki.ts               # 구현체
   tools.ts              # 구현체
 ```
 

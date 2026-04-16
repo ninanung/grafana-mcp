@@ -6,11 +6,11 @@
 
 ```typescript
 // O
-import { RedashClient } from "@/redash-client.js";
+import { GrafanaClient } from "@/grafana-client.js";
 import type { ToolResult } from "@/interfaces/tools.js";
 
 // X
-import { RedashClient } from "./redash-client.js";
+import { GrafanaClient } from "./grafana-client.js";
 import type { ToolResult } from "../interfaces/tools.js";
 ```
 
