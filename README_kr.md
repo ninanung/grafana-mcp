@@ -12,9 +12,75 @@ Grafana API 중 **자연어 기반 로그 조회**에 집중한 부분을 MCP(Mo
 
 ## 설치 및 설정
 
-### npx (설치 불필요)
+### 1. Grafana 인스턴스 등록
 
-`~/.mcp.json`에 아래 내용을 추가합니다.
+`~/.grafana-mcp/instances.json`에 Grafana URL + 인증 정보 쌍을 원하는 이름으로 등록합니다. 처음에는 1개만 있어도 됩니다.
+
+```json
+{
+  "default": "dev",
+  "instances": [
+    { "name": "dev", "url": "https://grafana-dev.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" }
+  ]
+}
+```
+
+```bash
+chmod 600 ~/.grafana-mcp/instances.json
+```
+
+모든 필드와 규칙은 [여러 Grafana 인스턴스](#여러-grafana-인스턴스)를 참고하세요.
+
+### 2. MCP 서버 등록
+
+서버가 인스턴스 파일을 읽으므로 `env`는 필요 없습니다.
+
+**Claude Code** — user 스코프로 등록하면 모든 프로젝트에서 쓸 수 있습니다 (`~/.claude.json`에 저장).
+
+```bash
+claude mcp add grafana -s user -- npx @seungje.jun/grafana-mcp
+```
+
+프로젝트 루트의 `.mcp.json`으로 팀과 공유하려면 `-s project`를 사용합니다.
+
+**다른 MCP 클라이언트** (Claude Desktop 등) — 클라이언트의 MCP 설정에 아래를 추가합니다.
+
+```json
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "npx",
+      "args": ["@seungje.jun/grafana-mcp"]
+    }
+  }
+}
+```
+
+클라이언트를 재시작하면(Claude Code는 새 세션 시작) MCP 툴이 활성화됩니다.
+
+### 소스에서 직접 빌드
+
+```bash
+git clone https://github.com/ninanung/grafana-mcp.git
+cd grafana-mcp
+npm install
+npm run build
+claude mcp add grafana -s user -- node /path/to/grafana-mcp/dist/cli.js
+```
+
+다른 클라이언트에서는 위 JSON에서 `"command": "node"`, `"args": ["/path/to/grafana-mcp/dist/cli.js"]`로 바꿔 씁니다.
+
+### 환경변수로 단일 인스턴스 사용
+
+기존 env 방식도 그대로 동작합니다. `GRAFANA_URL` + 인증 변수 1개가 이름 `default`인 인스턴스로 등록되며, 인스턴스 파일이 함께 있으면 병합됩니다.
+
+```bash
+claude mcp add grafana -s user \
+  -e GRAFANA_URL=https://grafana.example.com \
+  -e GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_xxx \
+  -- npx @seungje.jun/grafana-mcp
+```
 
 ```json
 {
@@ -31,35 +97,9 @@ Grafana API 중 **자연어 기반 로그 조회**에 집중한 부분을 MCP(Mo
 }
 ```
 
-### 소스에서 직접 빌드
-
-```bash
-git clone https://github.com/ninanung/grafana-mcp.git
-cd grafana-mcp
-npm install
-npm run build
-```
-
-```json
-{
-  "mcpServers": {
-    "grafana": {
-      "command": "node",
-      "args": ["/path/to/grafana-mcp/dist/cli.js"],
-      "env": {
-        "GRAFANA_URL": "https://grafana.example.com",
-        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "glsa_xxx"
-      }
-    }
-  }
-}
-```
-
-Claude Code를 재시작하면 MCP 툴이 활성화됩니다.
-
 ### 여러 Grafana 인스턴스
 
-`~/.grafana-mcp/instances.json`에 URL + 인증 정보 쌍을 원하는 만큼 등록하고 각각 원하는 이름을 붙이면, `.mcp.json` 수정이나 재시작 없이 대화 중에 전환하며 쓸 수 있습니다.
+URL + 인증 정보 쌍을 원하는 만큼 등록하고, MCP 설정 수정이나 재시작 없이 대화 중에 전환하며 쓸 수 있습니다.
 
 ```json
 {
@@ -69,19 +109,6 @@ Claude Code를 재시작하면 MCP 툴이 활성화됩니다.
     { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" },
     { "name": "team-b", "url": "https://grafana.example.com", "api_key": "eyXxx...", "org_id": 2 }
   ]
-}
-```
-
-파일이 있으면 `.mcp.json`에는 `env`가 필요 없습니다.
-
-```json
-{
-  "mcpServers": {
-    "grafana": {
-      "command": "npx",
-      "args": ["@seungje.jun/grafana-mcp"]
-    }
-  }
 }
 ```
 
@@ -95,14 +122,14 @@ Claude Code를 재시작하면 MCP 툴이 활성화됩니다.
 
 ### 인증 방식
 
-아래 중 하나가 필요합니다. 위에서부터 순서대로 확인하며, 먼저 설정된 값을 사용합니다.
+인스턴스마다 인증 정보 1개가 필요합니다. 인스턴스 파일에서는 필드명을, `GRAFANA_URL` 인스턴스에서는 환경변수를 씁니다. 위에서부터 순서대로 확인하며, 먼저 설정된 값을 사용합니다.
 
-| 변수 | 사용 시점 |
-|------|----------|
-| `GRAFANA_SERVICE_ACCOUNT_TOKEN` | Grafana 9.1+ (권장) |
-| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Cloud |
-| `GRAFANA_API_KEY` | 레거시 API Key (10.x에서 deprecated) |
-| `GRAFANA_USERNAME` + `GRAFANA_PASSWORD` | Basic Auth 폴백 |
+| 인스턴스 파일 필드 | 환경변수 | 사용 시점 |
+|-------------------|---------|----------|
+| `service_account_token` | `GRAFANA_SERVICE_ACCOUNT_TOKEN` | Grafana 9.1+ (권장) |
+| `cloud_access_policy_token` | `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Cloud |
+| `api_key` | `GRAFANA_API_KEY` | 레거시 API Key (10.x에서 deprecated) |
+| `username` + `password` | `GRAFANA_USERNAME` + `GRAFANA_PASSWORD` | Basic Auth 폴백 |
 
 Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송합니다. 어떤 종류의 토큰인지는 서버가 신경 쓰지 않고 설정된 것을 그대로 씁니다.
 
@@ -132,7 +159,7 @@ Grafana를 호출하는 모든 툴은 선택 인자 `instance`를 받아, 그 �
 |------|------|
 | `list_instances` | 등록된 인스턴스(이름·URL·인증 종류·소스)와 활성/기본 인스턴스 표시. 인증 값은 출력하지 않음 |
 | `use_instance` | 세션의 활성 인스턴스 전환 |
-| `self_test` | 헬스 체크 — 연결·버전·인증 + capability 프로브(`list_datasources`/`proxy_uid`/`ds_query`)와 권장 호출 패턴 안내 |
+| `self_test` | 헬스 체크 — 연결·버전·인증 + capability 프로브(`list_datasources`/`proxy_uid`/`ds_query`)와 권장 호출 패턴 안내. 인증 정보가 무효·만료(401)면 교체 안내 |
 | `list_datasources` | 설정된 모든 데이터소스 나열 |
 | `search_dashboards` | 쿼리/태그/타입으로 대시보드 검색 |
 | `get_dashboard` | uid로 대시보드 전체 JSON 조회 |

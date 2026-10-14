@@ -12,9 +12,75 @@ Log datasources, Loki labels, and the mapping from a service name to its hosting
 
 ## Installation & Setup
 
-### npx (no installation required)
+### 1. Register Grafana instances
 
-Add the following to `~/.mcp.json`.
+Create `~/.grafana-mcp/instances.json` with one or more Grafana URL + credential pairs, named however you like. One instance is enough to start.
+
+```json
+{
+  "default": "dev",
+  "instances": [
+    { "name": "dev", "url": "https://grafana-dev.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" }
+  ]
+}
+```
+
+```bash
+chmod 600 ~/.grafana-mcp/instances.json
+```
+
+See [Multiple Grafana instances](#multiple-grafana-instances) for every field and rule.
+
+### 2. Register the MCP server
+
+No `env` is needed — the server reads the instances file.
+
+**Claude Code** — user scope makes it available in every project (stored in `~/.claude.json`):
+
+```bash
+claude mcp add grafana -s user -- npx @seungje.jun/grafana-mcp
+```
+
+Use `-s project` instead to share it through a `.mcp.json` at the project root.
+
+**Other MCP clients** (e.g. Claude Desktop) — add this to the client's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "npx",
+      "args": ["@seungje.jun/grafana-mcp"]
+    }
+  }
+}
+```
+
+Restart the client (or start a new Claude Code session) to activate the MCP tools.
+
+### Build from source
+
+```bash
+git clone https://github.com/ninanung/grafana-mcp.git
+cd grafana-mcp
+npm install
+npm run build
+claude mcp add grafana -s user -- node /path/to/grafana-mcp/dist/cli.js
+```
+
+For other clients, use `"command": "node"` and `"args": ["/path/to/grafana-mcp/dist/cli.js"]` in the JSON above.
+
+### Single instance via environment variables
+
+The env-only setup still works: `GRAFANA_URL` + one credential variable is registered as an instance named `default`, and is merged with the instances file when both exist.
+
+```bash
+claude mcp add grafana -s user \
+  -e GRAFANA_URL=https://grafana.example.com \
+  -e GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_xxx \
+  -- npx @seungje.jun/grafana-mcp
+```
 
 ```json
 {
@@ -31,35 +97,9 @@ Add the following to `~/.mcp.json`.
 }
 ```
 
-### Build from source
-
-```bash
-git clone https://github.com/ninanung/grafana-mcp.git
-cd grafana-mcp
-npm install
-npm run build
-```
-
-```json
-{
-  "mcpServers": {
-    "grafana": {
-      "command": "node",
-      "args": ["/path/to/grafana-mcp/dist/cli.js"],
-      "env": {
-        "GRAFANA_URL": "https://grafana.example.com",
-        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "glsa_xxx"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Code to activate the MCP tools.
-
 ### Multiple Grafana instances
 
-Register as many URL + credential pairs as you need in `~/.grafana-mcp/instances.json`, give each one any name you like, and switch between them in conversation — no `.mcp.json` edits or restarts.
+Register as many URL + credential pairs as you need and switch between them in conversation — no MCP config edits or restarts.
 
 ```json
 {
@@ -69,19 +109,6 @@ Register as many URL + credential pairs as you need in `~/.grafana-mcp/instances
     { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" },
     { "name": "team-b", "url": "https://grafana.example.com", "api_key": "eyXxx...", "org_id": 2 }
   ]
-}
-```
-
-With the file in place, `.mcp.json` needs no `env` at all:
-
-```json
-{
-  "mcpServers": {
-    "grafana": {
-      "command": "npx",
-      "args": ["@seungje.jun/grafana-mcp"]
-    }
-  }
 }
 ```
 
@@ -95,14 +122,14 @@ With the file in place, `.mcp.json` needs no `env` at all:
 
 ### Authentication
 
-One of the following is required. They are checked in the order below — the first one present wins.
+Each instance needs one credential. Use the field name in the instances file, or the environment variable for the `GRAFANA_URL` instance. They are checked in the order below — the first one present wins.
 
-| Variable | When to use |
-|----------|-------------|
-| `GRAFANA_SERVICE_ACCOUNT_TOKEN` | Grafana 9.1+ (recommended) |
-| `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Cloud |
-| `GRAFANA_API_KEY` | Legacy API Keys (deprecated in 10.x) |
-| `GRAFANA_USERNAME` + `GRAFANA_PASSWORD` | Basic Auth fallback |
+| Instances file field | Environment variable | When to use |
+|----------------------|----------------------|-------------|
+| `service_account_token` | `GRAFANA_SERVICE_ACCOUNT_TOKEN` | Grafana 9.1+ (recommended) |
+| `cloud_access_policy_token` | `GRAFANA_CLOUD_ACCESS_POLICY_TOKEN` | Grafana Cloud |
+| `api_key` | `GRAFANA_API_KEY` | Legacy API Keys (deprecated in 10.x) |
+| `username` + `password` | `GRAFANA_USERNAME` + `GRAFANA_PASSWORD` | Basic Auth fallback |
 
 All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server does not care which kind of token it is — it only picks the one that is set.
 
@@ -132,7 +159,7 @@ Every tool that talks to Grafana accepts an optional `instance` argument to targ
 |------|-------------|
 | `list_instances` | List registered instances (name, url, auth kind, source) and which one is active/default. Secrets are never shown |
 | `use_instance` | Switch the active instance for the session |
-| `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `proxy_uid`, `ds_query`) with guidance on which arguments are required |
+| `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `proxy_uid`, `ds_query`) with guidance on which arguments are required. Flags invalid/expired credentials (401) and tells you to replace them |
 | `list_datasources` | List all configured datasources |
 | `search_dashboards` | Search dashboards by query/tag/type |
 | `get_dashboard` | Fetch a dashboard's full JSON by uid |
