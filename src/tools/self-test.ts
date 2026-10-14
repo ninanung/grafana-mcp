@@ -1,12 +1,9 @@
 import type { GrafanaClient } from "@/grafana-client.js";
+import type { CapabilityResult } from "@/interfaces/self-test.js";
 import type { ToolResult } from "@/interfaces/tools.js";
-import { isPermissionError, isProxyUidUnsupported } from "@/permission-error.js";
+import { isAuthError, isPermissionError, isProxyUidUnsupported } from "@/permission-error.js";
 
-interface CapabilityResult {
-  name: string;
-  ok: boolean;
-  detail: string;
-}
+const AUTH_FAILED_DETAIL = "authentication failed (401) — credentials are invalid or expired";
 
 export async function handleSelfTest(client: GrafanaClient): Promise<ToolResult> {
   const lines: string[] = [];
@@ -33,7 +30,8 @@ export async function handleSelfTest(client: GrafanaClient): Promise<ToolResult>
   lines.push("");
   lines.push(buildGuidance(caps));
 
-  return { content: [{ type: "text", text: lines.join("\n") }] };
+  const authFailed = caps.some((c) => c.authFailed);
+  return { content: [{ type: "text", text: lines.join("\n") }], isError: authFailed };
 }
 
 async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResult[]> {
@@ -48,29 +46,39 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
       detail: `${ds.length} datasource(s) visible — auto-detection paths available`,
     });
   } catch (err) {
-    const reason = isPermissionError(err) ? "permission denied (Editor+ key required)" : truncate(err);
-    out.push({
-      name: "list_datasources",
-      ok: false,
-      detail: `${reason} — supply datasource_uid explicitly for log queries`,
-    });
+    if (isAuthError(err)) {
+      out.push({ name: "list_datasources", ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true });
+    } else {
+      const reason = isPermissionError(err) ? "permission denied (Editor+ key required)" : truncate(err);
+      out.push({
+        name: "list_datasources",
+        ok: false,
+        detail: `${reason} — supply datasource_uid explicitly for log queries`,
+      });
+    }
   }
 
   // 2) proxy uid path (Grafana 9.0+)
   let proxyOk = false;
+  let proxyAuthFailed = false;
   try {
     await client.proxyGet("__probe__", "/api/v1/labels", { start: 0, end: 1 });
     proxyOk = true;
   } catch (err) {
-    proxyOk = !isProxyUidUnsupported(err) && !isPermissionError(err);
+    proxyAuthFailed = isAuthError(err);
+    proxyOk = !proxyAuthFailed && !isProxyUidUnsupported(err) && !isPermissionError(err);
   }
-  out.push({
-    name: "proxy_uid (labels/values)",
-    ok: proxyOk,
-    detail: proxyOk
-      ? "uid-based proxy works — service_label auto-detect available"
-      : "uid-based proxy unavailable (likely Grafana <9.0) — supply service_label explicitly or use raw_logql",
-  });
+  if (proxyAuthFailed) {
+    out.push({ name: "proxy_uid (labels/values)", ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true });
+  } else {
+    out.push({
+      name: "proxy_uid (labels/values)",
+      ok: proxyOk,
+      detail: proxyOk
+        ? "uid-based proxy works — service_label auto-detect available"
+        : "uid-based proxy unavailable (likely Grafana <9.0) — supply service_label explicitly or use raw_logql",
+    });
+  }
 
   // 3) /api/ds/query — universal viewer-friendly query path
   try {
@@ -81,7 +89,9 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
       detail: "available — used as fallback when proxy_uid is unsupported",
     });
   } catch (err) {
-    if (isPermissionError(err)) {
+    if (isAuthError(err)) {
+      out.push({ name: "ds_query (POST /api/ds/query)", ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true });
+    } else if (isPermissionError(err)) {
       out.push({
         name: "ds_query (POST /api/ds/query)",
         ok: false,
@@ -101,6 +111,9 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
 }
 
 function buildGuidance(caps: CapabilityResult[]): string {
+  if (caps.some((c) => c.authFailed)) {
+    return "guidance: Grafana rejected the credentials (401). Replace the token/password for this instance (e.g. issue a new service account token or API key); no query will work until then.";
+  }
   const cap = (n: string) => caps.find((c) => c.name.startsWith(n))?.ok ?? false;
   const list = cap("list_datasources");
   const proxy = cap("proxy_uid");

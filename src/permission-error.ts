@@ -1,3 +1,8 @@
+export function isAuthError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b401\b|Unauthorized/i.test(msg);
+}
+
 export function isPermissionError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /\b403\b|Permission denied|Forbidden/i.test(msg);
