@@ -116,7 +116,7 @@ Register as many URL + credential pairs as you need and switch between them in c
 - **Names are free-form** (`dev`, `qa`, `team-b`, ...) and matched case-insensitively. If `name` is omitted, the URL hostname is used. Names must be unique.
 - **Default**: the instance named by `default`, otherwise the first entry. A plain array of instances (without the wrapper object) is also accepted.
 - **Switching**: `use_instance name="prod"` changes the active instance for the session; passing `instance: "prod"` to any tool targets it for that call only. Every Grafana tool result (including errors) is tagged with `[instance: <name>]` so you always know which Grafana answered.
-- **Hot reload**: edits to the file are picked up on the next tool call. If the edited file is invalid, the previous list stays in effect and the result carries a warning.
+- **Hot reload**: edits to the file are picked up on the next tool call. If the edited file is invalid, the previous list stays in effect and the result carries a warning. (At startup, an invalid file stops the server with the reason.)
 - **Sources are merged**: the file, `GRAFANA_INSTANCES`, and `GRAFANA_URL` (registered as `default`) can be combined. At least one instance is required, otherwise the server refuses to start with setup instructions.
 - The file stores credentials in plain text — restrict it with `chmod 600 ~/.grafana-mcp/instances.json` (the server warns if other users can read it).
 
@@ -138,12 +138,12 @@ All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server 
 | Variable | Description |
 |----------|-------------|
 | `GRAFANA_URL` | Grafana server URL, registered as an instance named `default`. Optional when an instances file or `GRAFANA_INSTANCES` provides at least one instance. |
-| `GRAFANA_INSTANCES_FILE` | (optional) Path of the instances file. Defaults to `~/.grafana-mcp/instances.json`. See [Multiple Grafana instances](#multiple-grafana-instances). |
+| `GRAFANA_INSTANCES_FILE` | (optional) Path of the instances file. Defaults to `~/.grafana-mcp/instances.json`. A leading `~/` is expanded to the home directory. See [Multiple Grafana instances](#multiple-grafana-instances). |
 | `GRAFANA_INSTANCES` | (optional) JSON array of instance objects (same shape as the file's `instances`). Merged with the file and `GRAFANA_URL`. Example: `[{"name":"prod","url":"...","service_account_token":"..."}]` |
 | `GRAFANA_ORG_ID` | (optional) Sent as `X-Grafana-Org-Id` header for the `GRAFANA_URL` instance. For multi-org setups. |
 | `GRAFANA_TLS_SKIP_VERIFY` | (optional) `true` / `1` to skip TLS verification for the `GRAFANA_URL` instance (self-signed Grafana). |
 | `GRAFANA_MCP_LOG` | (optional) Log level: `debug`, `info` (default), `warn`, `error`, `silent`. Logs go to stderr to avoid corrupting the MCP stdio channel. |
-| `GRAFANA_MCP_AUDIT_LOG` | (optional) Audit log file path. Defaults to `~/.grafana-mcp/audit.log`. Set to `off` to disable. Each line is a JSON record with tool name, args, duration, status. |
+| `GRAFANA_MCP_AUDIT_LOG` | (optional) Audit log file path. Defaults to `~/.grafana-mcp/audit.log`. Set to `off` to disable. Each line is a JSON record with tool name, resolved instance, args, duration, status, and the error message on failure. |
 | `GRAFANA_MCP_CACHE` | (optional) Set to `off` to disable the on-disk log cache. |
 | `GRAFANA_MCP_CACHE_PATH` | (optional) Log cache file path. Defaults to `~/.grafana-mcp/log-cache.json`. |
 | `GRAFANA_MCP_CACHE_TTL_DATASOURCES_MS` | (optional) TTL for the log-datasource list cache. Default `86400000` (24h). |
@@ -153,7 +153,7 @@ All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server 
 
 ## Tools
 
-Every tool that talks to Grafana accepts an optional `instance` argument to target a registered instance for that call only.
+All tools except `list_instances`, `use_instance`, and `get_log_cache` / `export_log_cache` / `import_log_cache` accept an optional `instance` argument to target a registered instance for that call only.
 
 | Tool | Description |
 |------|-------------|
@@ -168,7 +168,7 @@ Every tool that talks to Grafana accepts an optional `instance` argument to targ
 | `list_services` | List service names discoverable from Loki labels — useful before calling `query_logs` |
 | `query_logs` | Query logs for a service/time-range/level. Auto-detects the log datasource and service label. Supports `raw_logql` for multi-label/advanced selectors. Falls back to `/api/ds/query` when uid-proxy is unavailable (Grafana <9.0). Output mode: `raw` / `summarize` / `json` |
 | `get_log_cache` | Inspect what is currently cached (log datasources, labels, resolved services) |
-| `refresh_log_cache` | Invalidate one service's resolution or clear all entries for the Grafana instance |
+| `refresh_log_cache` | Invalidate one service's resolution, or clear all entries of the active instance (or the one given by `instance`) |
 | `export_log_cache` | Export the log cache to a JSON file |
 | `import_log_cache` | Import a log cache from a JSON file (merge/replace) |
 
@@ -216,7 +216,7 @@ Auto-detection currently supports Loki only. For Elasticsearch / CloudWatch / Sp
 
 | Cache | Location | Reset |
 |-------|----------|-------|
-| Log cache | `~/.grafana-mcp/log-cache.json` | call `refresh_log_cache all=true`, or delete the file |
+| Log cache | `~/.grafana-mcp/log-cache.json` | `refresh_log_cache all=true` clears the active (or `instance`) Grafana's entries; delete the file to clear every instance |
 
 The cache file is a plain JSON document — safe to inspect, edit, or back up manually.
 

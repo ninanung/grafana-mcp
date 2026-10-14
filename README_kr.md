@@ -116,7 +116,7 @@ URL + 인증 정보 쌍을 원하는 만큼 등록하고, MCP 설정 수정이�
 - **이름은 자유롭게**(`dev`, `qa`, `team-b` 등) 붙이며 대소문자 구분 없이 매칭됩니다. `name`을 생략하면 URL의 hostname을 이름으로 씁니다. 이름은 중복될 수 없습니다.
 - **기본 인스턴스**: `default`로 지정한 인스턴스, 없으면 첫 번째 항목. 감싸는 객체 없이 인스턴스 배열만 써도 됩니다.
 - **전환**: `use_instance name="prod"`로 세션의 활성 인스턴스를 바꾸고, 아무 툴에나 `instance: "prod"`를 넘기면 그 호출만 해당 인스턴스로 갑니다. Grafana 툴 결과(에러 포함)에는 `[instance: <이름>]`이 붙어 어느 Grafana의 응답인지 항상 보입니다.
-- **핫 리로드**: 파일을 수정하면 다음 툴 호출부터 반영됩니다. 수정한 파일이 잘못되었으면 이전 목록을 그대로 쓰고 결과에 경고를 붙입니다.
+- **핫 리로드**: 파일을 수정하면 다음 툴 호출부터 반영됩니다. 수정한 파일이 잘못되었으면 이전 목록을 그대로 쓰고 결과에 경고를 붙입니다. (기동 시점에 파일이 잘못되었으면 사유와 함께 서버가 시작되지 않습니다.)
 - **소스 병합**: 파일, `GRAFANA_INSTANCES`, `GRAFANA_URL`(이름 `default`로 등록)을 함께 쓸 수 있습니다. 최소 1개는 등록되어야 하며, 없으면 설정 안내와 함께 서버가 시작되지 않습니다.
 - 파일에 인증 정보가 평문으로 저장되므로 `chmod 600 ~/.grafana-mcp/instances.json`으로 권한을 제한하세요 (다른 사용자가 읽을 수 있으면 서버가 경고합니다).
 
@@ -138,12 +138,12 @@ Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송�
 | 변수 | 설명 |
 |------|------|
 | `GRAFANA_URL` | Grafana 서버 URL. 이름 `default`인 인스턴스로 등록됩니다. 인스턴스 파일이나 `GRAFANA_INSTANCES`로 1개 이상 등록했다면 생략 가능. |
-| `GRAFANA_INSTANCES_FILE` | (선택) 인스턴스 파일 경로. 기본값 `~/.grafana-mcp/instances.json`. [여러 Grafana 인스턴스](#여러-grafana-인스턴스) 참고. |
+| `GRAFANA_INSTANCES_FILE` | (선택) 인스턴스 파일 경로. 기본값 `~/.grafana-mcp/instances.json`. `~/`로 시작하면 홈 디렉토리로 확장합니다. [여러 Grafana 인스턴스](#여러-grafana-인스턴스) 참고. |
 | `GRAFANA_INSTANCES` | (선택) 인스턴스 객체의 JSON 배열 (파일의 `instances`와 같은 형식). 파일·`GRAFANA_URL`과 병합됩니다. 예: `[{"name":"prod","url":"...","service_account_token":"..."}]` |
 | `GRAFANA_ORG_ID` | (선택) `GRAFANA_URL` 인스턴스에 `X-Grafana-Org-Id` 헤더로 전송. 다중 조직 환경에서 사용. |
 | `GRAFANA_TLS_SKIP_VERIFY` | (선택) `true`/`1` 설정 시 `GRAFANA_URL` 인스턴스의 TLS 검증을 건너뜀 (자체 서명 인증서용). |
 | `GRAFANA_MCP_LOG` | (선택) 로그 레벨: `debug`, `info`(기본), `warn`, `error`, `silent`. MCP stdio 채널을 보호하기 위해 로그는 stderr로만 보냅니다. |
-| `GRAFANA_MCP_AUDIT_LOG` | (선택) 감사 로그 파일 경로. 기본값 `~/.grafana-mcp/audit.log`. `off`로 설정하면 비활성화. 각 줄은 툴 이름·인자·소요 시간·상태를 담은 JSON. |
+| `GRAFANA_MCP_AUDIT_LOG` | (선택) 감사 로그 파일 경로. 기본값 `~/.grafana-mcp/audit.log`. `off`로 설정하면 비활성화. 각 줄은 툴 이름·해석된 인스턴스·인자·소요 시간·상태(실패 시 에러 메시지 포함)를 담은 JSON. |
 | `GRAFANA_MCP_CACHE` | (선택) `off` 설정 시 디스크 로그 캐시 비활성화. |
 | `GRAFANA_MCP_CACHE_PATH` | (선택) 로그 캐시 파일 경로. 기본값 `~/.grafana-mcp/log-cache.json`. |
 | `GRAFANA_MCP_CACHE_TTL_DATASOURCES_MS` | (선택) 로그 데이터소스 목록 캐시 TTL. 기본 `86400000` (24h). |
@@ -153,7 +153,7 @@ Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송�
 
 ## 도구
 
-Grafana를 호출하는 모든 툴은 선택 인자 `instance`를 받아, 그 호출만 등록된 다른 인스턴스로 보낼 수 있습니다.
+`list_instances`, `use_instance`, `get_log_cache` / `export_log_cache` / `import_log_cache`를 제외한 모든 툴은 선택 인자 `instance`를 받아, 그 호출만 등록된 다른 인스턴스로 보낼 수 있습니다.
 
 | 도구 | 설명 |
 |------|------|
@@ -168,7 +168,7 @@ Grafana를 호출하는 모든 툴은 선택 인자 `instance`를 받아, 그 �
 | `list_services` | Loki 라벨에서 수집한 서비스명 목록. `query_logs` 호출 전 이름 확인에 유용 |
 | `query_logs` | 서비스/시간대/레벨 기준 로그 조회. 로그 데이터소스와 서비스 라벨 자동 탐지. 다중 라벨/고급 쿼리는 `raw_logql` 사용. uid-proxy가 없으면(`Grafana <9.0`) `/api/ds/query`로 폴백. 출력 모드: `raw` / `summarize` / `json` |
 | `get_log_cache` | 현재 캐시 상태(로그 DS, 라벨, 해석된 서비스) 확인 |
-| `refresh_log_cache` | 특정 서비스 매핑 무효화 또는 전체 초기화 |
+| `refresh_log_cache` | 특정 서비스 매핑 무효화, 또는 활성 인스턴스(`instance` 지정 시 해당 인스턴스)의 캐시 전체 초기화 |
 | `export_log_cache` | 로그 캐시를 JSON 파일로 내보내기 |
 | `import_log_cache` | JSON 파일에서 로그 캐시 가져오기 (merge/replace) |
 
@@ -216,7 +216,7 @@ MCP 클라이언트가 오케스트레이션하는 전형적인 자연어 흐름
 
 | 캐시 | 위치 | 초기화 방법 |
 |------|------|-------------|
-| 로그 캐시 | `~/.grafana-mcp/log-cache.json` | `refresh_log_cache all=true` 호출 또는 파일 삭제 |
+| 로그 캐시 | `~/.grafana-mcp/log-cache.json` | `refresh_log_cache all=true`는 활성(또는 `instance`) Grafana의 항목만 초기화. 모든 인스턴스를 초기화하려면 파일 삭제 |
 
 캐시 파일은 일반 JSON이므로 직접 열어서 확인·수정·백업해도 안전합니다.
 
