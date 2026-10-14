@@ -5,14 +5,16 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AuditLog } from "@/audit-log.js";
-import { buildRegistryFromEnv, ClientRegistry } from "@/client-registry.js";
+import { ClientRegistry } from "@/client-registry.js";
+import { loadInstances } from "@/instance-config.js";
 import { LogCache } from "@/log-cache.js";
-import { getToolDefinitions, handleToolCall } from "@/tools.js";
+import { getToolDefinitions, handleToolCall, prependText } from "@/tools.js";
+import type { ToolResult } from "@/interfaces/tools.js";
 import { logger } from "@/logger.js";
 
 let registry: ClientRegistry;
 try {
-  registry = buildRegistryFromEnv();
+  registry = new ClientRegistry(loadInstances());
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
@@ -34,18 +36,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const started = Date.now();
   logger.debug(`tool call: ${name}`, args);
+  const notices = registry.reloadIfChanged();
+  const withNotices = (result: ToolResult): ToolResult =>
+    notices.length > 0 ? prependText(result, notices.join("\n")) : result;
 
   try {
-    const result = await handleToolCall(name, args ?? {}, registry, logCache);
+    const { result, instance, error } = await handleToolCall(name, args ?? {}, registry, logCache);
     const durationMs = Date.now() - started;
-    logger.info(`tool ${name} done in ${durationMs}ms`);
+    if (error) logger.error(`tool ${name} failed on ${instance}:`, error);
+    else logger.info(`tool ${name} done in ${durationMs}ms`);
     auditLog.record({
       tool: name,
+      instance,
       args,
       durationMs,
       status: result.isError ? "error" : "ok",
+      error,
     });
-    return result;
+    return withNotices(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error(`tool ${name} failed:`, message);
@@ -56,12 +64,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       status: "error",
       error: message,
     });
-    return {
+    return withNotices({
       content: [
         { type: "text" as const, text: `Error: ${message}` },
       ],
       isError: true,
-    };
+    });
   }
 });
 
@@ -69,7 +77,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   logger.info(
-    `grafana-mcp started (log level: ${logger.level}, instances: ${registry.names().join(",")}, audit: ${auditLog.getPath() ?? "off"}, cache: ${logCache.getPath() ?? "off"})`
+    `grafana-mcp started (log level: ${logger.level}, instances: ${registry.names().join(",")}, default: ${registry.getDefault().name}, instances file: ${registry.getFilePath()}, audit: ${auditLog.getPath() ?? "off"}, cache: ${logCache.getPath() ?? "off"})`
   );
 }
 

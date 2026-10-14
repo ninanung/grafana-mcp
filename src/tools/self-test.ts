@@ -8,12 +8,9 @@ interface CapabilityResult {
   detail: string;
 }
 
-export async function handleSelfTest(
-  client: GrafanaClient,
-  instanceName: string
-): Promise<ToolResult> {
+export async function handleSelfTest(client: GrafanaClient): Promise<ToolResult> {
   const lines: string[] = [];
-  lines.push(`instance: ${instanceName}`);
+  lines.push(`url: ${client.getBaseUrl()}`);
   lines.push(`auth: ${client.getAuthDescription()}`);
 
   let version = "unknown";

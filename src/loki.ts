@@ -15,7 +15,7 @@ export async function fetchLokiLabels(
   endMs: number,
   cache?: LogCache
 ): Promise<string[]> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   const cached = cache?.getLabels(url, dsUid);
   if (cached) return cached;
 
@@ -36,7 +36,7 @@ export async function fetchLabelValues(
   endMs: number,
   cache?: LogCache
 ): Promise<string[]> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   const cached = cache?.getLabelValues(url, dsUid, label);
   if (cached) return cached;
 

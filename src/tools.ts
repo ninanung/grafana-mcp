@@ -1,6 +1,6 @@
-import { ClientRegistry } from "@/client-registry.js";
+import type { ClientRegistry, InstanceContext } from "@/client-registry.js";
 import type { LogCache } from "@/log-cache.js";
-import type { ToolDefinition, ToolResult } from "@/interfaces/tools.js";
+import type { ToolCallOutcome, ToolDefinition, ToolResult } from "@/interfaces/tools.js";
 import type {
   SearchDashboardsArgs,
   GetDashboardArgs,
@@ -9,7 +9,10 @@ import type {
   RefreshLogCacheArgs,
   ExportLogCacheArgs,
   ImportLogCacheArgs,
+  UseInstanceArgs,
 } from "@/interfaces/tool-args.js";
+import { handleListInstances } from "@/tools/list-instances.js";
+import { handleUseInstance } from "@/tools/use-instance.js";
 import { handleSelfTest } from "@/tools/self-test.js";
 import { handleListDataSources } from "@/tools/list-datasources.js";
 import { handleSearchDashboards } from "@/tools/search-dashboards.js";
@@ -29,8 +32,56 @@ import {
   handleImportLogCache,
 } from "@/tools/log-cache-tools.js";
 
+const INSTANCE_INDEPENDENT_TOOLS = new Set([
+  "list_instances",
+  "use_instance",
+  "get_log_cache",
+  "export_log_cache",
+  "import_log_cache",
+]);
+
+const INSTANCE_PROPERTY = {
+  type: "string",
+  description:
+    "Optional. Registered Grafana instance name to target for this call only (see list_instances). Omit to use the active instance.",
+};
+
+function withInstanceProperty(def: ToolDefinition): ToolDefinition {
+  return {
+    ...def,
+    inputSchema: {
+      ...def.inputSchema,
+      properties: { ...def.inputSchema.properties, instance: INSTANCE_PROPERTY },
+    },
+  };
+}
+
 export function getToolDefinitions(): ToolDefinition[] {
+  return baseToolDefinitions().map((def) =>
+    INSTANCE_INDEPENDENT_TOOLS.has(def.name) ? def : withInstanceProperty(def)
+  );
+}
+
+function baseToolDefinitions(): ToolDefinition[] {
   return [
+    {
+      name: "list_instances",
+      description:
+        "List registered Grafana instances (name, url, auth kind, source) and show which one is active/default. Call this to learn valid `instance` names.",
+      inputSchema: { type: "object", properties: {} },
+    },
+    {
+      name: "use_instance",
+      description:
+        "Switch the active Grafana instance for this session. Subsequent tool calls without `instance` target it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Registered instance name (see list_instances)." },
+        },
+        required: ["name"],
+      },
+    },
     {
       name: "self_test",
       description:
@@ -222,23 +273,78 @@ export function getToolDefinitions(): ToolDefinition[] {
   ];
 }
 
+export function prependText(result: ToolResult, text: string): ToolResult {
+  const [first, ...rest] = result.content;
+  if (!first) return { ...result, content: [{ type: "text", text }] };
+  return { ...result, content: [{ ...first, text: `${text}\n${first.text}` }, ...rest] };
+}
+
 export async function handleToolCall(
   name: string,
   rawArgs: Record<string, unknown>,
   registry: ClientRegistry,
   cache: LogCache
-): Promise<ToolResult> {
+): Promise<ToolCallOutcome> {
   const { instance, ...args } = rawArgs as Record<string, unknown> & {
     instance?: string;
   };
+
+  if (INSTANCE_INDEPENDENT_TOOLS.has(name)) {
+    return { result: await handleInstanceIndependentTool(name, args, registry, cache) };
+  }
+
   const ctx = registry.resolve(
-    typeof instance === "string" ? instance : undefined
+    typeof instance === "string" && instance.trim() ? instance : undefined
   );
+  const tag = `[instance: ${ctx.name}]`;
+  let result: ToolResult | null;
+  try {
+    result = await handleInstanceTool(name, args, ctx, cache);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      result: { content: [{ type: "text", text: `${tag}\nError: ${message}` }], isError: true },
+      instance: ctx.name,
+      error: message,
+    };
+  }
+  if (!result) return { result: unknownTool(name) };
+  return { result: prependText(result, tag), instance: ctx.name };
+}
+
+async function handleInstanceIndependentTool(
+  name: string,
+  args: Record<string, unknown>,
+  registry: ClientRegistry,
+  cache: LogCache
+): Promise<ToolResult> {
+  switch (name) {
+    case "list_instances":
+      return handleListInstances(registry);
+    case "use_instance":
+      return handleUseInstance(args as unknown as UseInstanceArgs, registry);
+    case "get_log_cache":
+      return handleGetLogCache(args as unknown as GetLogCacheArgs, cache);
+    case "export_log_cache":
+      return handleExportLogCache(args as unknown as ExportLogCacheArgs, cache);
+    case "import_log_cache":
+      return handleImportLogCache(args as unknown as ImportLogCacheArgs, cache);
+    default:
+      return unknownTool(name);
+  }
+}
+
+async function handleInstanceTool(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: InstanceContext,
+  cache: LogCache
+): Promise<ToolResult | null> {
   const client = ctx.client;
 
   switch (name) {
     case "self_test":
-      return handleSelfTest(client, ctx.name);
+      return handleSelfTest(client);
     case "list_datasources":
       return handleListDataSources(client);
     case "search_dashboards":
@@ -253,18 +359,16 @@ export async function handleToolCall(
       return handleListServices(args as unknown as ListServicesArgs, client, cache);
     case "query_logs":
       return handleQueryLogs(args as unknown as QueryLogsArgs, client, cache);
-    case "get_log_cache":
-      return handleGetLogCache(args as unknown as GetLogCacheArgs, cache);
     case "refresh_log_cache":
       return handleRefreshLogCache(args as unknown as RefreshLogCacheArgs, client, cache);
-    case "export_log_cache":
-      return handleExportLogCache(args as unknown as ExportLogCacheArgs, cache);
-    case "import_log_cache":
-      return handleImportLogCache(args as unknown as ImportLogCacheArgs, cache);
     default:
-      return {
-        content: [{ type: "text", text: `Unknown tool: ${name}` }],
-        isError: true,
-      };
+      return null;
   }
+}
+
+function unknownTool(name: string): ToolResult {
+  return {
+    content: [{ type: "text", text: `Unknown tool: ${name}` }],
+    isError: true,
+  };
 }

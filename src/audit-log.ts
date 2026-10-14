@@ -23,6 +23,7 @@ export class AuditLog {
 
   record(entry: {
     tool: string;
+    instance?: string;
     args?: Record<string, unknown>;
     durationMs?: number;
     status: "ok" | "error";

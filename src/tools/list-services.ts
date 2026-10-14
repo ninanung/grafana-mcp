@@ -16,7 +16,7 @@ export async function handleListServices(
   client: GrafanaClient,
   cache?: LogCache
 ): Promise<ToolResult> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   const now = Date.now();
   const startMs = parseTime(args.time_from ?? "now-1h", now);
   const endMs = parseTime(args.time_to ?? "now", now);

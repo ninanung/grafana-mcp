@@ -57,6 +57,42 @@ npm run build
 
 Claude Code를 재시작하면 MCP 툴이 활성화됩니다.
 
+### 여러 Grafana 인스턴스
+
+`~/.grafana-mcp/instances.json`에 URL + 인증 정보 쌍을 원하는 만큼 등록하고 각각 원하는 이름을 붙이면, `.mcp.json` 수정이나 재시작 없이 대화 중에 전환하며 쓸 수 있습니다.
+
+```json
+{
+  "default": "dev",
+  "instances": [
+    { "name": "dev", "url": "https://grafana-dev.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "team-b", "url": "https://grafana.example.com", "api_key": "eyXxx...", "org_id": 2 }
+  ]
+}
+```
+
+파일이 있으면 `.mcp.json`에는 `env`가 필요 없습니다.
+
+```json
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "npx",
+      "args": ["@seungje.jun/grafana-mcp"]
+    }
+  }
+}
+```
+
+- **인스턴스별 필드**: `url`(필수), 인증 정보 1개(`service_account_token` / `cloud_access_policy_token` / `api_key` / `username` + `password`), 선택 `name`, `org_id`, `tls_skip_verify`.
+- **이름은 자유롭게**(`dev`, `qa`, `team-b` 등) 붙이며 대소문자 구분 없이 매칭됩니다. `name`을 생략하면 URL의 hostname을 이름으로 씁니다. 이름은 중복될 수 없습니다.
+- **기본 인스턴스**: `default`로 지정한 인스턴스, 없으면 첫 번째 항목. 감싸는 객체 없이 인스턴스 배열만 써도 됩니다.
+- **전환**: `use_instance name="prod"`로 세션의 활성 인스턴스를 바꾸고, 아무 툴에나 `instance: "prod"`를 넘기면 그 호출만 해당 인스턴스로 갑니다. Grafana 툴 결과(에러 포함)에는 `[instance: <이름>]`이 붙어 어느 Grafana의 응답인지 항상 보입니다.
+- **핫 리로드**: 파일을 수정하면 다음 툴 호출부터 반영됩니다. 수정한 파일이 잘못되었으면 이전 목록을 그대로 쓰고 결과에 경고를 붙입니다.
+- **소스 병합**: 파일, `GRAFANA_INSTANCES`, `GRAFANA_URL`(이름 `default`로 등록)을 함께 쓸 수 있습니다. 최소 1개는 등록되어야 하며, 없으면 설정 안내와 함께 서버가 시작되지 않습니다.
+- 파일에 인증 정보가 평문으로 저장되므로 `chmod 600 ~/.grafana-mcp/instances.json`으로 권한을 제한하세요 (다른 사용자가 읽을 수 있으면 서버가 경고합니다).
+
 ### 인증 방식
 
 아래 중 하나가 필요합니다. 위에서부터 순서대로 확인하며, 먼저 설정된 값을 사용합니다.
@@ -74,10 +110,11 @@ Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송�
 
 | 변수 | 설명 |
 |------|------|
-| `GRAFANA_URL` | Grafana 서버 URL (단일 인스턴스 모드, `GRAFANA_INSTANCES` 미설정 시 필수) |
-| `GRAFANA_INSTANCES` | (선택) 멀티 인스턴스 모드 JSON 배열. 예: `[{"name":"prod","url":"...","service_account_token":"..."},{"name":"dev","url":"...","api_key":"..."}]`. 설정 시 툴 호출에 `instance: "prod"`로 대상을 지정합니다. 생략 시 첫 번째 항목을 사용합니다. |
-| `GRAFANA_ORG_ID` | (선택) `X-Grafana-Org-Id` 헤더로 전송. 다중 조직 환경에서 사용. |
-| `GRAFANA_TLS_SKIP_VERIFY` | (선택) `true`/`1` 설정 시 TLS 검증을 건너뜀 (자체 서명 인증서용). |
+| `GRAFANA_URL` | Grafana 서버 URL. 이름 `default`인 인스턴스로 등록됩니다. 인스턴스 파일이나 `GRAFANA_INSTANCES`로 1개 이상 등록했다면 생략 가능. |
+| `GRAFANA_INSTANCES_FILE` | (선택) 인스턴스 파일 경로. 기본값 `~/.grafana-mcp/instances.json`. [여러 Grafana 인스턴스](#여러-grafana-인스턴스) 참고. |
+| `GRAFANA_INSTANCES` | (선택) 인스턴스 객체의 JSON 배열 (파일의 `instances`와 같은 형식). 파일·`GRAFANA_URL`과 병합됩니다. 예: `[{"name":"prod","url":"...","service_account_token":"..."}]` |
+| `GRAFANA_ORG_ID` | (선택) `GRAFANA_URL` 인스턴스에 `X-Grafana-Org-Id` 헤더로 전송. 다중 조직 환경에서 사용. |
+| `GRAFANA_TLS_SKIP_VERIFY` | (선택) `true`/`1` 설정 시 `GRAFANA_URL` 인스턴스의 TLS 검증을 건너뜀 (자체 서명 인증서용). |
 | `GRAFANA_MCP_LOG` | (선택) 로그 레벨: `debug`, `info`(기본), `warn`, `error`, `silent`. MCP stdio 채널을 보호하기 위해 로그는 stderr로만 보냅니다. |
 | `GRAFANA_MCP_AUDIT_LOG` | (선택) 감사 로그 파일 경로. 기본값 `~/.grafana-mcp/audit.log`. `off`로 설정하면 비활성화. 각 줄은 툴 이름·인자·소요 시간·상태를 담은 JSON. |
 | `GRAFANA_MCP_CACHE` | (선택) `off` 설정 시 디스크 로그 캐시 비활성화. |
@@ -89,8 +126,12 @@ Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송�
 
 ## 도구
 
+Grafana를 호출하는 모든 툴은 선택 인자 `instance`를 받아, 그 호출만 등록된 다른 인스턴스로 보낼 수 있습니다.
+
 | 도구 | 설명 |
 |------|------|
+| `list_instances` | 등록된 인스턴스(이름·URL·인증 종류·소스)와 활성/기본 인스턴스 표시. 인증 값은 출력하지 않음 |
+| `use_instance` | 세션의 활성 인스턴스 전환 |
 | `self_test` | 헬스 체크 — 연결·버전·인증 + capability 프로브(`list_datasources`/`proxy_uid`/`ds_query`)와 권장 호출 패턴 안내 |
 | `list_datasources` | 설정된 모든 데이터소스 나열 |
 | `search_dashboards` | 쿼리/태그/타입으로 대시보드 검색 |
@@ -113,6 +154,7 @@ MCP 클라이언트가 오케스트레이션하는 전형적인 자연어 흐름
 3. (첫 호출) 서비스 → 데이터소스/라벨 매핑이 캐시에 저장되어 이후 호출은 탐지 단계를 건너뜀.
 4. 사용자: "그 에러들 패턴별로 정리해줘." → 같은 호출을 `output: "summarize"`로 실행하면 패턴 그룹핑 결과 반환.
 5. 사용자: "어떤 서비스들이 있더라?" → `list_services` 호출로 전체 서비스 목록 반환.
+6. 사용자: "prod에서도 똑같이 봐줘." → `use_instance name="prod"` 후 같은 `query_logs`가 prod로 실행. "dev랑 비교해줘"는 `instance: "dev"`를 넘긴 1회성 `query_logs`로 처리 가능.
 
 서비스명에 오탈자가 있으면 `query_logs`가 가까운 이름을 제안합니다 (예: `Did you mean: checkout, checkout-api?`).
 
@@ -138,7 +180,7 @@ MCP 클라이언트가 오케스트레이션하는 전형적인 자연어 흐름
 
 ## 캐시
 
-- **로그 캐시**: `~/.grafana-mcp/log-cache.json`에 영구 저장. Grafana 기본 URL별로 분리되어 멀티 인스턴스 충돌 방지.
+- **로그 캐시**: `~/.grafana-mcp/log-cache.json`에 영구 저장. Grafana 기본 URL(`org_id`가 있으면 URL + `org_id`)별로 분리되어 멀티 인스턴스 충돌 방지.
 - 카테고리별로 별도 TTL을 가짐 (데이터소스 / 라벨 / 라벨 값 / 서비스 매핑) — 위 환경변수 표 참고.
 - 캐시된 서비스 매핑이 이후 실패하면(예: 라벨이 바뀐 경우) 자동으로 무효화되어 다음 호출에서 재탐지.
 - `get_log_cache`로 조회, `refresh_log_cache`로 초기화, `export_log_cache` / `import_log_cache`로 팀원 간 공유.
@@ -155,7 +197,8 @@ MCP 클라이언트가 오케스트레이션하는 전형적인 자연어 흐름
 
 - **읽기 전용**: Grafana 상태를 변경하는 엔드포인트는 노출하지 않습니다. 대시보드/데이터소스 CRUD, 알럿 변경 없음.
 - **stdio 로그 보호**: 모든 로그는 stderr로 보내 MCP stdio 채널을 깨끗하게 유지.
-- **TLS 검증 스킵**: `GRAFANA_TLS_SKIP_VERIFY=true`는 `NODE_TLS_REJECT_UNAUTHORIZED=0`을 프로세스 전역으로 설정합니다. 신뢰 가능한 네트워크의 자체 서명 Grafana에서만 사용하세요.
+- **TLS 검증 스킵**: `GRAFANA_TLS_SKIP_VERIFY=true` / `tls_skip_verify: true`는 `NODE_TLS_REJECT_UNAUTHORIZED=0`을 프로세스 전역으로 설정합니다. 인스턴스가 여러 개일 때 하나라도 켜면 **모든** 인스턴스의 TLS 검증이 꺼집니다 (기동 시와 `list_instances`에서 경고). 신뢰 가능한 네트워크의 자체 서명 Grafana에서만 사용하세요.
+- **인증 정보 파일**: `instances.json`에는 토큰이 평문으로 저장됩니다. `chmod 600`으로 유지하세요. 다른 사용자가 읽을 수 있으면 서버가 경고합니다.
 - **시크릿 로그 금지**: 인증 토큰은 감사 로그에 기록되지 않습니다.
 
 ## 라이선스

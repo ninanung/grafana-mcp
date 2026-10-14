@@ -17,3 +17,9 @@ export interface ToolResult {
   content: { type: "text"; text: string }[];
   isError?: boolean;
 }
+
+export interface ToolCallOutcome {
+  result: ToolResult;
+  instance?: string;
+  error?: string;
+}

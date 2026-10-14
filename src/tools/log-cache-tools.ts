@@ -37,7 +37,7 @@ export async function handleRefreshLogCache(
   cache?: LogCache
 ): Promise<ToolResult> {
   const c = ensureCache(cache);
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   if (args.all) {
     c.clear(url);
     return {

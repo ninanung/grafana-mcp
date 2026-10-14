@@ -26,7 +26,7 @@ async function getLogDatasources(
   cache?: LogCache,
   refresh?: boolean
 ): Promise<GrafanaDataSource[]> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   if (!refresh) {
     const cached = cache?.getLogDatasources(url);
     if (cached) return cached;
@@ -44,7 +44,7 @@ async function resolveTarget(
   endMs: number,
   cache?: LogCache
 ): Promise<ResolvedTarget> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   const service = args.service as string;
 
   if (!args.refresh && !args.service_label) {
@@ -256,7 +256,7 @@ export async function handleQueryLogs(
     try {
       target = await resolveTarget(client, args, startMs, endMs, cache);
     } catch (err) {
-      if (cache && args.service) cache.invalidateService(client.getBaseUrl(), args.service);
+      if (cache && args.service) cache.invalidateService(client.getCacheKey(), args.service);
       throw err;
     }
     logql = buildLogQL(target.serviceLabel, args.service as string, args.level, args.keyword);
@@ -275,7 +275,7 @@ export async function handleQueryLogs(
     queryPath = res.path === "ds_query" ? "ds_query [fallback]" : "proxy_uid";
   } catch (err) {
     if (fromCache && cache && args.service) {
-      cache.invalidateService(client.getBaseUrl(), args.service);
+      cache.invalidateService(client.getCacheKey(), args.service);
     }
     throw err;
   }

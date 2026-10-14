@@ -57,6 +57,42 @@ npm run build
 
 Restart Claude Code to activate the MCP tools.
 
+### Multiple Grafana instances
+
+Register as many URL + credential pairs as you need in `~/.grafana-mcp/instances.json`, give each one any name you like, and switch between them in conversation — no `.mcp.json` edits or restarts.
+
+```json
+{
+  "default": "dev",
+  "instances": [
+    { "name": "dev", "url": "https://grafana-dev.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "prod", "url": "https://grafana.example.com", "service_account_token": "glsa_xxx" },
+    { "name": "team-b", "url": "https://grafana.example.com", "api_key": "eyXxx...", "org_id": 2 }
+  ]
+}
+```
+
+With the file in place, `.mcp.json` needs no `env` at all:
+
+```json
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "npx",
+      "args": ["@seungje.jun/grafana-mcp"]
+    }
+  }
+}
+```
+
+- **Fields per instance**: `url` (required), one credential (`service_account_token` / `cloud_access_policy_token` / `api_key` / `username` + `password`), optional `name`, `org_id`, `tls_skip_verify`.
+- **Names are free-form** (`dev`, `qa`, `team-b`, ...) and matched case-insensitively. If `name` is omitted, the URL hostname is used. Names must be unique.
+- **Default**: the instance named by `default`, otherwise the first entry. A plain array of instances (without the wrapper object) is also accepted.
+- **Switching**: `use_instance name="prod"` changes the active instance for the session; passing `instance: "prod"` to any tool targets it for that call only. Every Grafana tool result (including errors) is tagged with `[instance: <name>]` so you always know which Grafana answered.
+- **Hot reload**: edits to the file are picked up on the next tool call. If the edited file is invalid, the previous list stays in effect and the result carries a warning.
+- **Sources are merged**: the file, `GRAFANA_INSTANCES`, and `GRAFANA_URL` (registered as `default`) can be combined. At least one instance is required, otherwise the server refuses to start with setup instructions.
+- The file stores credentials in plain text — restrict it with `chmod 600 ~/.grafana-mcp/instances.json` (the server warns if other users can read it).
+
 ### Authentication
 
 One of the following is required. They are checked in the order below — the first one present wins.
@@ -74,10 +110,11 @@ All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server 
 
 | Variable | Description |
 |----------|-------------|
-| `GRAFANA_URL` | Grafana server URL (single-instance mode, required when `GRAFANA_INSTANCES` is unset) |
-| `GRAFANA_INSTANCES` | (optional) JSON array for multi-instance mode. Example: `[{"name":"prod","url":"...","service_account_token":"..."},{"name":"dev","url":"...","api_key":"..."}]`. When set, pass `instance: "prod"` on any tool call to pick the target. Falls back to the first entry if omitted. |
-| `GRAFANA_ORG_ID` | (optional) Sent as `X-Grafana-Org-Id` header. For multi-org setups. |
-| `GRAFANA_TLS_SKIP_VERIFY` | (optional) `true` / `1` to skip TLS verification (self-signed Grafana). |
+| `GRAFANA_URL` | Grafana server URL, registered as an instance named `default`. Optional when an instances file or `GRAFANA_INSTANCES` provides at least one instance. |
+| `GRAFANA_INSTANCES_FILE` | (optional) Path of the instances file. Defaults to `~/.grafana-mcp/instances.json`. See [Multiple Grafana instances](#multiple-grafana-instances). |
+| `GRAFANA_INSTANCES` | (optional) JSON array of instance objects (same shape as the file's `instances`). Merged with the file and `GRAFANA_URL`. Example: `[{"name":"prod","url":"...","service_account_token":"..."}]` |
+| `GRAFANA_ORG_ID` | (optional) Sent as `X-Grafana-Org-Id` header for the `GRAFANA_URL` instance. For multi-org setups. |
+| `GRAFANA_TLS_SKIP_VERIFY` | (optional) `true` / `1` to skip TLS verification for the `GRAFANA_URL` instance (self-signed Grafana). |
 | `GRAFANA_MCP_LOG` | (optional) Log level: `debug`, `info` (default), `warn`, `error`, `silent`. Logs go to stderr to avoid corrupting the MCP stdio channel. |
 | `GRAFANA_MCP_AUDIT_LOG` | (optional) Audit log file path. Defaults to `~/.grafana-mcp/audit.log`. Set to `off` to disable. Each line is a JSON record with tool name, args, duration, status. |
 | `GRAFANA_MCP_CACHE` | (optional) Set to `off` to disable the on-disk log cache. |
@@ -89,8 +126,12 @@ All bearer-style tokens are sent as `Authorization: Bearer <token>`. The server 
 
 ## Tools
 
+Every tool that talks to Grafana accepts an optional `instance` argument to target a registered instance for that call only.
+
 | Tool | Description |
 |------|-------------|
+| `list_instances` | List registered instances (name, url, auth kind, source) and which one is active/default. Secrets are never shown |
+| `use_instance` | Switch the active instance for the session |
 | `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `proxy_uid`, `ds_query`) with guidance on which arguments are required |
 | `list_datasources` | List all configured datasources |
 | `search_dashboards` | Search dashboards by query/tag/type |
@@ -113,6 +154,7 @@ A typical natural-language flow, as orchestrated by the MCP client:
 3. (First call) the service → datasource/label mapping is saved to the cache; subsequent calls skip the detection step.
 4. User: "Summarize those errors by pattern." → same call with `output: "summarize"` returns pattern-grouped counts.
 5. User: "What other services do we have?" → `list_services` returns the full service list.
+6. User: "Check the same thing on prod." → `use_instance name="prod"`, then the same `query_logs` call runs against prod. "Compare with dev" can be a one-off `query_logs` with `instance: "dev"`.
 
 If the service name has a typo, `query_logs` surfaces close matches (e.g. `Did you mean: checkout, checkout-api?`).
 
@@ -138,7 +180,7 @@ Auto-detection currently supports Loki only. For Elasticsearch / CloudWatch / Sp
 
 ## Cache
 
-- **Log cache**: persisted to `~/.grafana-mcp/log-cache.json`. Keyed by Grafana base URL so multiple instances don't collide.
+- **Log cache**: persisted to `~/.grafana-mcp/log-cache.json`. Keyed by Grafana base URL (plus `org_id` when set) so multiple instances don't collide.
 - Each category has its own TTL (datasources / labels / label values / service resolution) — see the env-var table above.
 - A cached service resolution that later fails (e.g. label got renamed) is invalidated automatically so the next call re-detects.
 - Use `get_log_cache` to inspect, `refresh_log_cache` to clear, and `export_log_cache` / `import_log_cache` to share with teammates.
@@ -155,7 +197,8 @@ The cache file is a plain JSON document — safe to inspect, edit, or back up ma
 
 - **Read-only**: the server does not expose any endpoint that mutates Grafana state. No dashboard/datasource CRUD, no alerting changes.
 - **Stdio logs**: all logs go to stderr, keeping the MCP stdio channel clean.
-- **TLS skip**: `GRAFANA_TLS_SKIP_VERIFY=true` sets `NODE_TLS_REJECT_UNAUTHORIZED=0` process-wide. Use only for self-signed Grafana in trusted networks.
+- **TLS skip**: `GRAFANA_TLS_SKIP_VERIFY=true` / `tls_skip_verify: true` sets `NODE_TLS_REJECT_UNAUTHORIZED=0` process-wide. With multiple instances, enabling it on one disables TLS verification for **all** of them (the server warns at startup and in `list_instances`). Use only for self-signed Grafana in trusted networks.
+- **Credentials file**: `instances.json` holds tokens in plain text. Keep it `chmod 600`; the server warns when other users can read it.
 - **No secret logging**: auth tokens are never written to audit logs.
 
 ## License

@@ -1,127 +1,129 @@
 import { GrafanaClient } from "@/grafana-client.js";
-import type { AuthConfig } from "@/interfaces/grafana-client.js";
+import { suggestClosest } from "@/fuzzy-match.js";
+import { getFileMtime, loadInstances } from "@/instance-config.js";
+export type { ActiveSwitch, InstanceContext } from "@/interfaces/client-registry.js";
+import type {
+  ActiveSwitch,
+  InstanceContext,
+  RegistryState,
+} from "@/interfaces/client-registry.js";
+import type { LoadedInstances } from "@/interfaces/instance-config.js";
+import { logger } from "@/logger.js";
 
-export interface InstanceContext {
-  name: string;
-  client: GrafanaClient;
-}
-
-interface InstanceConfig {
-  name: string;
-  url: string;
-  service_account_token?: string;
-  api_key?: string;
-  cloud_access_policy_token?: string;
-  username?: string;
-  password?: string;
-  org_id?: number;
-  tls_skip_verify?: boolean;
+function buildState(loaded: LoadedInstances): RegistryState {
+  const instances = new Map<string, InstanceContext>();
+  for (const inst of loaded.instances) {
+    instances.set(inst.name.toLowerCase(), {
+      name: inst.name,
+      source: inst.source,
+      orgId: inst.orgId,
+      tlsSkipVerify: inst.tlsSkipVerify,
+      client: new GrafanaClient(inst.url, inst.auth, {
+        orgId: inst.orgId,
+        tlsSkipVerify: inst.tlsSkipVerify,
+      }),
+    });
+  }
+  return {
+    instances,
+    defaultKey: loaded.defaultName.toLowerCase(),
+    filePath: loaded.filePath,
+    fileMtimeMs: loaded.fileMtimeMs,
+  };
 }
 
 export class ClientRegistry {
-  private instances = new Map<string, InstanceContext>();
-  private defaultName: string;
+  private state: RegistryState;
+  private activeKey: string | null = null;
 
-  constructor(defaultName: string) {
-    this.defaultName = defaultName;
-  }
-
-  add(name: string, client: GrafanaClient): void {
-    this.instances.set(name, { name, client });
+  constructor(loaded: LoadedInstances) {
+    this.state = buildState(loaded);
+    this.warnIfTlsSkipShared();
   }
 
   resolve(name?: string): InstanceContext {
-    const key = name ?? this.defaultName;
-    const ctx = this.instances.get(key);
-    if (!ctx) {
-      const available = Array.from(this.instances.keys()).join(", ");
-      throw new Error(
-        `Unknown Grafana instance: "${key}". Available instances: ${available}`
-      );
-    }
+    if (name === undefined) return this.getActive();
+    return this.lookup(name);
+  }
+
+  setActive(name: string): ActiveSwitch {
+    const previous = this.getActive();
+    const current = this.lookup(name);
+    this.activeKey = current.name.toLowerCase();
+    return { previous, current };
+  }
+
+  getActive(): InstanceContext {
+    const active = this.activeKey ? this.state.instances.get(this.activeKey) : undefined;
+    return active ?? this.getDefault();
+  }
+
+  getDefault(): InstanceContext {
+    const ctx = this.state.instances.get(this.state.defaultKey);
+    if (!ctx) throw new Error(`Default instance "${this.state.defaultKey}" is not registered.`);
     return ctx;
   }
 
+  list(): InstanceContext[] {
+    return Array.from(this.state.instances.values());
+  }
+
   names(): string[] {
-    return Array.from(this.instances.keys());
+    return this.list().map((ctx) => ctx.name);
   }
-}
 
-function resolveAuth(cfg: {
-  service_account_token?: string;
-  api_key?: string;
-  cloud_access_policy_token?: string;
-  username?: string;
-  password?: string;
-}): AuthConfig {
-  if (cfg.service_account_token) {
-    return { mode: "bearer", token: cfg.service_account_token, tokenKind: "service_account" };
+  getFilePath(): string {
+    return this.state.filePath;
   }
-  if (cfg.cloud_access_policy_token) {
-    return { mode: "bearer", token: cfg.cloud_access_policy_token, tokenKind: "cloud_access_policy" };
-  }
-  if (cfg.api_key) {
-    return { mode: "bearer", token: cfg.api_key, tokenKind: "api_key" };
-  }
-  if (cfg.username && cfg.password) {
-    return { mode: "basic", username: cfg.username, password: cfg.password };
-  }
-  throw new Error(
-    "No Grafana credentials provided. Set one of: GRAFANA_SERVICE_ACCOUNT_TOKEN, GRAFANA_CLOUD_ACCESS_POLICY_TOKEN, GRAFANA_API_KEY, or GRAFANA_USERNAME + GRAFANA_PASSWORD."
-  );
-}
 
-export function buildRegistryFromEnv(): ClientRegistry {
-  const raw = process.env.GRAFANA_INSTANCES;
-  if (raw) {
-    const parsed = JSON.parse(raw) as InstanceConfig[];
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error("GRAFANA_INSTANCES must be a non-empty array.");
+  getTlsWarning(): string | null {
+    const skipped = this.list().filter((ctx) => ctx.tlsSkipVerify);
+    if (skipped.length === 0 || this.state.instances.size < 2) return null;
+    const names = skipped.map((ctx) => ctx.name).join(", ");
+    return `tls_skip_verify is enabled for ${names}. It disables TLS verification process-wide, so it also applies to every other instance.`;
+  }
+
+  reloadIfChanged(): string[] {
+    const mtime = getFileMtime(this.state.filePath);
+    if (mtime === this.state.fileMtimeMs) return [];
+
+    let loaded: LoadedInstances;
+    try {
+      loaded = loadInstances();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`instances reload failed, keeping previous list: ${msg}`);
+      return [`Warning: failed to reload ${this.state.filePath}; keeping the previous instance list. ${msg}`];
     }
-    const registry = new ClientRegistry(parsed[0].name);
-    for (const cfg of parsed) {
-      if (!cfg.name || !cfg.url) {
-        throw new Error(
-          `Each GRAFANA_INSTANCES entry requires name and url: ${JSON.stringify(cfg)}`
-        );
-      }
-      const auth = resolveAuth(cfg);
-      registry.add(
-        cfg.name,
-        new GrafanaClient(cfg.url, auth, {
-          orgId: cfg.org_id,
-          tlsSkipVerify: cfg.tls_skip_verify,
-        })
+
+    const previousActive = this.activeKey ? this.state.instances.get(this.activeKey) : undefined;
+    this.state = buildState(loaded);
+    this.warnIfTlsSkipShared();
+
+    const notices = [`Reloaded instances from ${this.state.filePath}: ${this.names().join(", ")}.`];
+    if (this.activeKey && !this.state.instances.has(this.activeKey)) {
+      notices.push(
+        `Active instance "${previousActive?.name ?? this.activeKey}" is no longer registered; switched back to default "${this.getDefault().name}".`
       );
+      this.activeKey = null;
     }
-    return registry;
+    logger.info(notices.join(" "));
+    return notices;
   }
 
-  const url = process.env.GRAFANA_URL;
-  if (!url) {
+  private lookup(name: string): InstanceContext {
+    const ctx = this.state.instances.get(name.trim().toLowerCase());
+    if (ctx) return ctx;
+    const names = this.names();
+    const suggestions = suggestClosest(name, names, 3);
+    const hint = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(", ")}?` : "";
     throw new Error(
-      "GRAFANA_URL is required (or set GRAFANA_INSTANCES for multi-instance mode)."
+      `Unknown Grafana instance: "${name}".${hint} Available instances: ${names.join(", ")}. Use list_instances for details.`
     );
   }
 
-  const auth = resolveAuth({
-    service_account_token: process.env.GRAFANA_SERVICE_ACCOUNT_TOKEN,
-    cloud_access_policy_token: process.env.GRAFANA_CLOUD_ACCESS_POLICY_TOKEN,
-    api_key: process.env.GRAFANA_API_KEY,
-    username: process.env.GRAFANA_USERNAME,
-    password: process.env.GRAFANA_PASSWORD,
-  });
-
-  const orgIdRaw = process.env.GRAFANA_ORG_ID;
-  const orgId = orgIdRaw ? Number(orgIdRaw) : undefined;
-  const tlsSkipVerify =
-    process.env.GRAFANA_TLS_SKIP_VERIFY === "true" ||
-    process.env.GRAFANA_TLS_SKIP_VERIFY === "1";
-
-  const registry = new ClientRegistry("default");
-  registry.add(
-    "default",
-    new GrafanaClient(url, auth, { orgId, tlsSkipVerify })
-  );
-  return registry;
+  private warnIfTlsSkipShared(): void {
+    const warning = this.getTlsWarning();
+    if (warning) logger.warn(warning);
+  }
 }

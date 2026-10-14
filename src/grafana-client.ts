@@ -38,6 +38,10 @@ export class GrafanaClient {
     return this.baseUrl;
   }
 
+  getCacheKey(): string {
+    return this.orgId ? `${this.baseUrl}#org=${this.orgId}` : this.baseUrl;
+  }
+
   getAuthDescription(): string {
     if (this.auth.mode === "bearer") {
       return `bearer (${this.auth.tokenKind ?? "token"})`;

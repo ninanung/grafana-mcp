@@ -8,7 +8,7 @@ export async function handleListLogDataSources(
   client: GrafanaClient,
   cache?: LogCache
 ): Promise<ToolResult> {
-  const url = client.getBaseUrl();
+  const url = client.getCacheKey();
   const cached = cache?.getLogDatasources(url);
   let sources;
   if (cached) {

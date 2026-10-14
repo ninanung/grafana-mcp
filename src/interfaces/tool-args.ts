@@ -58,3 +58,7 @@ export interface ImportLogCacheArgs {
 export interface ListLogDataSourcesArgs {
   // no args
 }
+
+export interface UseInstanceArgs {
+  name: string;
+}
