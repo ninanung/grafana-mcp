@@ -1,7 +1,7 @@
 import type { GrafanaClient } from "@/grafana-client.js";
 import type { CapabilityResult } from "@/interfaces/self-test.js";
 import type { ToolResult } from "@/interfaces/tools.js";
-import { isAuthError, isPermissionError, isProxyUidUnsupported } from "@/permission-error.js";
+import { isAuthError, isPermissionError } from "@/permission-error.js";
 
 const AUTH_FAILED_DETAIL = "authentication failed (401) — credentials are invalid or expired";
 
@@ -37,19 +37,26 @@ export async function handleSelfTest(client: GrafanaClient): Promise<ToolResult>
 async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResult[]> {
   const out: CapabilityResult[] = [];
 
-  // 1) listDataSources — admin/editor required on most versions
+  // 1) datasource list — /api/datasources, falling back to /api/frontend/settings
+  let lokiUid: string | undefined;
   try {
-    const ds = await client.listDataSources();
+    const { sources, via } = await client.listDataSourcesDetailed();
+    lokiUid = sources.find((d) => d.type === "loki")?.uid;
     out.push({
       name: "list_datasources",
       ok: true,
-      detail: `${ds.length} datasource(s) visible — auto-detection paths available`,
+      detail:
+        via === "frontend_settings"
+          ? `${sources.length} datasource(s) visible via /api/frontend/settings (/api/datasources denied) — auto-detection paths available`
+          : `${sources.length} datasource(s) visible — auto-detection paths available`,
     });
   } catch (err) {
     if (isAuthError(err)) {
       out.push({ name: "list_datasources", ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true });
     } else {
-      const reason = isPermissionError(err) ? "permission denied (Editor+ key required)" : truncate(err);
+      const reason = isPermissionError(err)
+        ? "permission denied on /api/datasources and /api/frontend/settings"
+        : truncate(err);
       out.push({
         name: "list_datasources",
         ok: false,
@@ -58,27 +65,8 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
     }
   }
 
-  // 2) proxy uid path (Grafana 9.0+)
-  let proxyOk = false;
-  let proxyAuthFailed = false;
-  try {
-    await client.proxyGet("__probe__", "/api/v1/labels", { start: 0, end: 1 });
-    proxyOk = true;
-  } catch (err) {
-    proxyAuthFailed = isAuthError(err);
-    proxyOk = !proxyAuthFailed && !isProxyUidUnsupported(err) && !isPermissionError(err);
-  }
-  if (proxyAuthFailed) {
-    out.push({ name: "proxy_uid (labels/values)", ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true });
-  } else {
-    out.push({
-      name: "proxy_uid (labels/values)",
-      ok: proxyOk,
-      detail: proxyOk
-        ? "uid-based proxy works — service_label auto-detect available"
-        : "uid-based proxy unavailable (likely Grafana <9.0) — supply service_label explicitly or use raw_logql",
-    });
-  }
+  // 2) datasource proxy for Loki labels (uid route on Grafana 9.0+, numeric id route below)
+  out.push(await probeLabelProxy(client, lokiUid));
 
   // 3) /api/ds/query — universal viewer-friendly query path
   try {
@@ -86,7 +74,7 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
     out.push({
       name: "ds_query (POST /api/ds/query)",
       ok: true,
-      detail: "available — used as fallback when proxy_uid is unsupported",
+      detail: "available — used as fallback when the datasource proxy is unavailable",
     });
   } catch (err) {
     if (isAuthError(err)) {
@@ -95,7 +83,7 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
       out.push({
         name: "ds_query (POST /api/ds/query)",
         ok: false,
-        detail: "permission denied — log queries will fail on Grafana <9.0",
+        detail: "permission denied — no fallback when the datasource proxy is unavailable",
       });
     } else {
       // Empty queries return 4xx but proves the endpoint exists
@@ -110,13 +98,40 @@ async function probeCapabilities(client: GrafanaClient): Promise<CapabilityResul
   return out;
 }
 
+async function probeLabelProxy(client: GrafanaClient, lokiUid: string | undefined): Promise<CapabilityResult> {
+  const name = "datasource_proxy (labels/values)";
+  if (!lokiUid) {
+    return {
+      name,
+      ok: false,
+      detail: "skipped — no Loki datasource visible to probe; supply service_label explicitly or use raw_logql",
+    };
+  }
+  const endNs = Date.now() * 1_000_000;
+  try {
+    await client.proxyGet(lokiUid, "/loki/api/v1/labels", { start: endNs - 3_600_000 * 1_000_000, end: endNs });
+    return {
+      name,
+      ok: true,
+      detail:
+        client.getProxyRoute() === "id"
+          ? "uid route unsupported (Grafana <9.0) — using id-based proxy; service_label auto-detect available"
+          : "uid-based proxy works — service_label auto-detect available",
+    };
+  } catch (err) {
+    if (isAuthError(err)) return { name, ok: false, detail: AUTH_FAILED_DETAIL, authFailed: true };
+    const reason = isPermissionError(err) ? "permission denied" : truncate(err);
+    return { name, ok: false, detail: `${reason} — supply service_label explicitly or use raw_logql` };
+  }
+}
+
 function buildGuidance(caps: CapabilityResult[]): string {
   if (caps.some((c) => c.authFailed)) {
     return "guidance: Grafana rejected the credentials (401). Replace the token/password for this instance (e.g. issue a new service account token or API key); no query will work until then.";
   }
   const cap = (n: string) => caps.find((c) => c.name.startsWith(n))?.ok ?? false;
   const list = cap("list_datasources");
-  const proxy = cap("proxy_uid");
+  const proxy = cap("datasource_proxy");
   if (list && proxy) {
     return "guidance: full auto-detection works. `query_logs(service=\"...\")` is sufficient.";
   }

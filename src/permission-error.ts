@@ -13,11 +13,17 @@ export function isProxyUidUnsupported(err: unknown): boolean {
   return /proxy\/uid\/.*(400|404)/.test(msg) || /id is invalid/i.test(msg);
 }
 
+// Grafana <9.0 has no /proxy/uid/ route: it parses "uid" as the numeric id and answers 400 "id is invalid".
+export function isUidProxyRouteMissing(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /id is invalid/i.test(msg);
+}
+
 export function permissionHint(operation: "list_datasources" | "list_services", requiredArg: string): string {
   const how =
     operation === "list_datasources"
-      ? "Listing datasources requires Editor/Admin permission on this Grafana instance."
-      : "Auto-detecting the service label requires permission this API key lacks.";
+      ? "This API key cannot list datasources on this Grafana instance (/api/datasources was denied and the /api/frontend/settings fallback failed)."
+      : "This API key is not allowed to read Loki labels through the Grafana datasource proxy, so the service label cannot be auto-detected.";
   const easiest =
     "Easiest: ask the user for a Grafana dashboard URL that already shows the logs they care about (e.g. https://<grafana>/d/<uid>/...), then call `extract_dashboard_queries` with that uid to read off `datasource_uid` (and a ready-to-use LogQL `expr` for `raw_logql`).";
   const alternatives =

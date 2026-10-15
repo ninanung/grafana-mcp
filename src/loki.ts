@@ -5,8 +5,10 @@ import type {
   LokiLabelValuesResponse,
   LokiQueryRangeResponse,
   LogLine,
+  QueryLokiResult,
 } from "@/interfaces/loki.js";
 import { SERVICE_LABEL_CANDIDATES } from "@/log-backends.js";
+import { isProxyUidUnsupported } from "@/permission-error.js";
 
 export async function fetchLokiLabels(
   client: GrafanaClient,
@@ -77,6 +79,12 @@ export async function detectServiceLabel(
   return null;
 }
 
+export function describeDatasourceFailure(ds: { name: string; uid: string }, err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const brief = msg.length > 160 ? msg.slice(0, 160) + "…" : msg;
+  return `${ds.name} (uid=${ds.uid}): ${brief.replace(/\s*—\s*$/, "").trim()}`;
+}
+
 export function buildLogQL(
   serviceLabel: string,
   service: string,
@@ -92,11 +100,6 @@ export function buildLogQL(
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export interface QueryLokiResult {
-  lines: LogLine[];
-  path: "proxy_uid" | "ds_query";
 }
 
 export async function queryLokiRange(
@@ -132,9 +135,10 @@ export async function queryLokiRange(
       }
     }
     out.sort((a, b) => (a.timestampNs < b.timestampNs ? 1 : -1));
-    return { lines: out.slice(0, limit), path: "proxy_uid" };
+    const path = client.getProxyRoute() === "id" ? "proxy_id" : "proxy_uid";
+    return { lines: out.slice(0, limit), path };
   } catch (err) {
-    if (!isProxyUidUnsupported(err)) throw err;
+    if (!isProxyUidUnsupported(err) && client.getProxyRoute() !== "id") throw err;
     const lines = await queryLokiViaDsQuery(client, dsUid, logql, startMs, endMs, limit);
     return { lines, path: "ds_query" };
   }
@@ -227,9 +231,4 @@ function parseStreamLabels(name?: string): Record<string, string> {
     out[match[1]] = match[2].replace(/\\"/g, '"');
   }
   return out;
-}
-
-function isProxyUidUnsupported(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /proxy\/uid\/.*(400|404)/.test(msg) || /id is invalid/i.test(msg);
 }

@@ -159,14 +159,14 @@ Bearer 계열 토큰은 모두 `Authorization: Bearer <token>` 헤더로 전송�
 |------|------|
 | `list_instances` | 등록된 인스턴스(이름·URL·인증 종류·소스)와 활성/기본 인스턴스 표시. 인증 값은 출력하지 않음 |
 | `use_instance` | 세션의 활성 인스턴스 전환 |
-| `self_test` | 헬스 체크 — 연결·버전·인증 + capability 프로브(`list_datasources`/`proxy_uid`/`ds_query`)와 권장 호출 패턴 안내. 인증 정보가 무효·만료(401)면 교체 안내 |
-| `list_datasources` | 설정된 모든 데이터소스 나열 |
+| `self_test` | 헬스 체크 — 연결·버전·인증 + capability 프로브(`list_datasources`/`datasource_proxy`/`ds_query`), 사용 중인 폴백 경로와 권장 호출 패턴 안내. 인증 정보가 무효·만료(401)면 교체 안내 |
+| `list_datasources` | 설정된 모든 데이터소스 나열. 키가 `/api/datasources`에서 거부되면(403) `/api/frontend/settings`로 대신 조회 |
 | `search_dashboards` | 쿼리/태그/타입으로 대시보드 검색 |
 | `get_dashboard` | uid로 대시보드 전체 JSON 조회 |
 | `extract_dashboard_queries` | 대시보드의 패널 쿼리(LogQL/PromQL)와 `datasource_uid`를 추출. 대시보드 URL 한 번에 `query_logs.raw_logql` 인자를 얻을 수 있음 |
 | `list_log_datasources` | 로그 타입 데이터소스(Loki/ES/CloudWatch/OpenSearch/Splunk)만 필터. 캐시 사용 |
-| `list_services` | Loki 라벨에서 수집한 서비스명 목록. `query_logs` 호출 전 이름 확인에 유용 |
-| `query_logs` | 서비스/시간대/레벨 기준 로그 조회. 로그 데이터소스와 서비스 라벨 자동 탐지. 다중 라벨/고급 쿼리는 `raw_logql` 사용. uid-proxy가 없으면(`Grafana <9.0`) `/api/ds/query`로 폴백. 출력 모드: `raw` / `summarize` / `json` |
+| `list_services` | Loki 라벨에서 수집한 서비스명 목록. `query_logs` 호출 전 이름 확인에 유용. 라벨 API가 실패한 Loki 데이터소스(예: 연결 불가)는 전체 호출을 실패시키지 않고 `error` 필드와 함께 표시 |
+| `query_logs` | 서비스/시간대/레벨 기준 로그 조회. 로그 데이터소스와 서비스 라벨 자동 탐지. 다중 라벨/고급 쿼리는 `raw_logql` 사용. uid 기반 데이터소스 프록시가 없는 Grafana <9.0에서는 숫자 id 프록시를 쓰고, 프록시를 쓸 수 없으면 `/api/ds/query`로 폴백. 출력 모드: `raw` / `summarize` / `json` |
 | `get_log_cache` | 현재 캐시 상태(로그 DS, 라벨, 해석된 서비스) 확인 |
 | `refresh_log_cache` | 특정 서비스 매핑 무효화, 또는 활성 인스턴스(`instance` 지정 시 해당 인스턴스)의 캐시 전체 초기화 |
 | `export_log_cache` | 로그 캐시를 JSON 파일로 내보내기 |
@@ -189,11 +189,13 @@ MCP 클라이언트가 오케스트레이션하는 전형적인 자연어 흐름
 
 `query_logs`는 대상 데이터소스와 라벨을 다음 절차로 스스로 결정합니다.
 
-1. 전체 데이터소스 중 로그 타입(Loki/ES/CloudWatch/OpenSearch/Splunk)만 추림.
-2. 각 Loki 데이터소스에서 `/loki/api/v1/labels`를 호출해 서비스 라벨 후보(`service`, `service_name`, `app`, `app_name`, `application`, `container`, `job`)를 먼저 훑고, 나머지 라벨을 이어서 훑음.
+1. 데이터소스 목록을 가져와(`/api/datasources`, 키가 거부되면 `/api/frontend/settings`) 로그 타입(Loki/ES/CloudWatch/OpenSearch/Splunk)만 추림.
+2. 각 Loki 데이터소스에서 `/loki/api/v1/labels`를 호출해 서비스 라벨 후보(`service`, `service_name`, `app`, `app_name`, `application`, `container`, `job`)를 먼저 훑고, 나머지 라벨을 이어서 훑음. 라벨 API가 실패한 데이터소스는 건너뛰며, 매칭이 없으면 건너뛴 데이터소스를 에러에 함께 표시.
 3. 각 후보 라벨의 값 목록을 가져와 요청된 `service` 이름이 있는지 확인.
 4. `(datasource, label)` 매칭이 정확히 1개면 자동 선택. 2개 이상이면 `datasource_uid`로 구분 요청. 0개면 유사 이름 제안.
 5. 해석된 `(service → ds_uid, label)`는 캐시에 저장됨. `refresh: true` 또는 `refresh_log_cache`로 강제 재탐지 가능.
+
+Grafana 8.x에서도 동작합니다. `/api/datasources/proxy/uid/{uid}`가 없는 버전(Grafana <9.0)에서는 Loki 라벨·로그 요청을 `/api/datasources/proxy/{id}`로 보내며, 숫자 id는 데이터소스 목록에서 찾습니다. 인스턴스가 어떤 경로를 쓰는지는 `self_test`로 확인할 수 있습니다.
 
 자동 탐지는 현재 Loki만 지원합니다. Elasticsearch / CloudWatch / Splunk는 `datasource_uid`와 `service_label`을 명시적으로 전달해야 하며, Loki 전용 필터는 적용되지 않습니다.
 

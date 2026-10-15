@@ -6,6 +6,9 @@ export type {
   GrafanaDataSource,
   GrafanaDashboardSearchHit,
   GrafanaDashboardDetail,
+  DataSourceListResult,
+  DataSourceListVia,
+  ProxyRoute,
 } from "@/interfaces/grafana-client.js";
 import type {
   AuthConfig,
@@ -14,13 +17,20 @@ import type {
   GrafanaDataSource,
   GrafanaDashboardSearchHit,
   GrafanaDashboardDetail,
+  DataSourceListResult,
+  DataSourceListVia,
+  ProxyRoute,
 } from "@/interfaces/grafana-client.js";
+import { dataSourcesFromFrontendSettings } from "@/frontend-settings.js";
+import { isPermissionError, isUidProxyRouteMissing } from "@/permission-error.js";
 
 export class GrafanaClient {
   private baseUrl: string;
   private auth: AuthConfig;
   private timeout: number;
   private orgId?: number;
+  private proxyRoute: ProxyRoute = "uid";
+  private dataSourceIds = new Map<string, number>();
 
   constructor(baseUrl: string, auth: AuthConfig, options: GrafanaClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -115,8 +125,37 @@ export class GrafanaClient {
     return this.request<GrafanaHealth>("GET", "/api/health");
   }
 
-  listDataSources(): Promise<GrafanaDataSource[]> {
-    return this.request<GrafanaDataSource[]>("GET", "/api/datasources");
+  async listDataSourcesDetailed(): Promise<DataSourceListResult> {
+    let sources: GrafanaDataSource[];
+    let via: DataSourceListVia;
+    try {
+      sources = await this.request<GrafanaDataSource[]>("GET", "/api/datasources");
+      via = "datasources_api";
+    } catch (err) {
+      if (!isPermissionError(err)) throw err;
+      // Keys without datasource read permission get 403 here; frontend settings lists datasources to any signed-in user.
+      sources = await this.listDataSourcesFromFrontendSettings(err);
+      via = "frontend_settings";
+    }
+    for (const ds of sources) {
+      if (ds.id !== undefined) this.dataSourceIds.set(ds.uid, ds.id);
+    }
+    return { sources, via };
+  }
+
+  async listDataSources(): Promise<GrafanaDataSource[]> {
+    return (await this.listDataSourcesDetailed()).sources;
+  }
+
+  private async listDataSourcesFromFrontendSettings(denied: unknown): Promise<GrafanaDataSource[]> {
+    try {
+      const settings = await this.request<unknown>("GET", "/api/frontend/settings");
+      return dataSourcesFromFrontendSettings(settings);
+    } catch (fallbackErr) {
+      const deniedMsg = denied instanceof Error ? denied.message : String(denied);
+      const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      throw new Error(`${deniedMsg} (fallback /api/frontend/settings also failed: ${fallbackMsg})`);
+    }
   }
 
   getDataSourceByUid(uid: string): Promise<GrafanaDataSource> {
@@ -145,8 +184,34 @@ export class GrafanaClient {
     return this.request<unknown>("POST", "/api/ds/query", { body: payload });
   }
 
-  proxyGet<T>(datasourceUid: string, subPath: string, query?: Record<string, unknown>): Promise<T> {
-    const path = `/api/datasources/proxy/uid/${encodeURIComponent(datasourceUid)}${subPath}`;
-    return this.request<T>("GET", path, { query });
+  getProxyRoute(): ProxyRoute {
+    return this.proxyRoute;
+  }
+
+  async proxyGet<T>(datasourceUid: string, subPath: string, query?: Record<string, unknown>): Promise<T> {
+    if (this.proxyRoute === "uid") {
+      try {
+        const path = `/api/datasources/proxy/uid/${encodeURIComponent(datasourceUid)}${subPath}`;
+        return await this.request<T>("GET", path, { query });
+      } catch (err) {
+        if (!isUidProxyRouteMissing(err)) throw err;
+        this.proxyRoute = "id";
+      }
+    }
+    const id = await this.resolveDataSourceId(datasourceUid);
+    return this.request<T>("GET", `/api/datasources/proxy/${id}${subPath}`, { query });
+  }
+
+  private async resolveDataSourceId(uid: string): Promise<number> {
+    const known = this.dataSourceIds.get(uid);
+    if (known !== undefined) return known;
+    await this.listDataSourcesDetailed();
+    const id = this.dataSourceIds.get(uid);
+    if (id === undefined) {
+      throw new Error(
+        `Datasource uid "${uid}" was not found on this Grafana instance. Grafana <9.0 proxies by numeric id, so the uid must resolve to an id — check it with list_log_datasources.`
+      );
+    }
+    return id;
   }
 }

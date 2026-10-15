@@ -27,3 +27,10 @@ export interface LogLine {
   line: string;
   labels: Record<string, string>;
 }
+
+export type LokiQueryPath = "proxy_uid" | "proxy_id" | "ds_query";
+
+export interface QueryLokiResult {
+  lines: LogLine[];
+  path: LokiQueryPath;
+}

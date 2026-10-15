@@ -6,6 +6,7 @@ import type { LogLine } from "@/interfaces/loki.js";
 import type { LogCache } from "@/log-cache.js";
 import { LOG_DATASOURCE_TYPES, SERVICE_LABEL_CANDIDATES, parseTime } from "@/log-backends.js";
 import {
+  describeDatasourceFailure,
   detectServiceLabel,
   fetchLabelValues,
   fetchLokiLabels,
@@ -13,7 +14,7 @@ import {
   queryLokiRange,
 } from "@/loki.js";
 import { suggestClosest } from "@/fuzzy-match.js";
-import { isPermissionError, isProxyUidUnsupported, permissionHint } from "@/permission-error.js";
+import { isPermissionError, permissionHint } from "@/permission-error.js";
 
 interface ResolvedTarget {
   datasource: GrafanaDataSource;
@@ -98,17 +99,22 @@ async function resolveTarget(
   }
 
   const matches: Array<{ datasource: GrafanaDataSource; serviceLabel: string }> = [];
+  const failures: Array<{ datasource: GrafanaDataSource; error: unknown }> = [];
   for (const ds of lokiCandidates) {
-    let label: string | null | undefined;
     try {
-      label = await detectServiceLabel(client, ds.uid, service, startMs, endMs, cache);
+      const label = await detectServiceLabel(client, ds.uid, service, startMs, endMs, cache);
+      if (label) matches.push({ datasource: ds, serviceLabel: label });
     } catch (err) {
-      if (isPermissionError(err) || isProxyUidUnsupported(err)) {
-        throw new Error(permissionHint("list_services", "args.service_label"));
-      }
-      throw err;
+      failures.push({ datasource: ds, error: err });
     }
-    if (label) matches.push({ datasource: ds, serviceLabel: label });
+  }
+
+  if (matches.length === 0 && failures.length === lokiCandidates.length) {
+    if (failures.some((f) => isPermissionError(f.error))) {
+      throw new Error(permissionHint("list_services", "args.service_label"));
+    }
+    const detail = failures.map((f) => describeDatasourceFailure(f.datasource, f.error)).join("; ");
+    throw new Error(`Could not read Loki labels from any datasource: ${detail}`);
   }
 
   if (matches.length === 0) {
@@ -123,8 +129,11 @@ async function resolveTarget(
     const hint = suggestions.length > 0
       ? ` Did you mean: ${suggestions.join(", ")}?`
       : "";
+    const skipped = failures.length > 0
+      ? ` Skipped unreachable datasource(s): ${failures.map((f) => describeDatasourceFailure(f.datasource, f.error)).join("; ")}.`
+      : "";
     throw new Error(
-      `Service "${service}" not found in any Loki datasource labels in the given time range.${hint} Try a wider time_from, run list_services, or verify the service name.`
+      `Service "${service}" not found in any Loki datasource labels in the given time range.${hint}${skipped} Try a wider time_from, run list_services, or verify the service name.`
     );
   }
   if (matches.length > 1) {
@@ -272,7 +281,7 @@ export async function handleQueryLogs(
   try {
     const res = await queryLokiRange(client, dsUid, logql, startMs, endMs, limit);
     lines = res.lines;
-    queryPath = res.path === "ds_query" ? "ds_query [fallback]" : "proxy_uid";
+    queryPath = res.path === "ds_query" ? "ds_query [fallback]" : res.path;
   } catch (err) {
     if (fromCache && cache && args.service) {
       cache.invalidateService(client.getCacheKey(), args.service);

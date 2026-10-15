@@ -159,14 +159,14 @@ All tools except `list_instances`, `use_instance`, and `get_log_cache` / `export
 |------|-------------|
 | `list_instances` | List registered instances (name, url, auth kind, source) and which one is active/default. Secrets are never shown |
 | `use_instance` | Switch the active instance for the session |
-| `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `proxy_uid`, `ds_query`) with guidance on which arguments are required. Flags invalid/expired credentials (401) and tells you to replace them |
-| `list_datasources` | List all configured datasources |
+| `self_test` | Diagnostic check — connectivity, version, auth, and capability probes (`list_datasources`, `datasource_proxy`, `ds_query`), including which fallback route is in use, with guidance on which arguments are required. Flags invalid/expired credentials (401) and tells you to replace them |
+| `list_datasources` | List all configured datasources. Falls back to `/api/frontend/settings` when the key is denied `/api/datasources` (403) |
 | `search_dashboards` | Search dashboards by query/tag/type |
 | `get_dashboard` | Fetch a dashboard's full JSON by uid |
 | `extract_dashboard_queries` | Extract panel queries (LogQL/PromQL) from a dashboard, with `datasource_uid`. Use to discover args for `query_logs.raw_logql` from a dashboard URL |
 | `list_log_datasources` | List only log-type datasources (Loki, Elasticsearch, CloudWatch, OpenSearch, Splunk). Cached |
-| `list_services` | List service names discoverable from Loki labels — useful before calling `query_logs` |
-| `query_logs` | Query logs for a service/time-range/level. Auto-detects the log datasource and service label. Supports `raw_logql` for multi-label/advanced selectors. Falls back to `/api/ds/query` when uid-proxy is unavailable (Grafana <9.0). Output mode: `raw` / `summarize` / `json` |
+| `list_services` | List service names discoverable from Loki labels — useful before calling `query_logs`. A Loki datasource whose label API fails (e.g. unreachable) is listed with an `error` field instead of failing the whole call |
+| `query_logs` | Query logs for a service/time-range/level. Auto-detects the log datasource and service label. Supports `raw_logql` for multi-label/advanced selectors. On Grafana <9.0 (no uid-based datasource proxy) it uses the numeric-id proxy instead, and falls back to `/api/ds/query` when the proxy is unavailable. Output mode: `raw` / `summarize` / `json` |
 | `get_log_cache` | Inspect what is currently cached (log datasources, labels, resolved services) |
 | `refresh_log_cache` | Invalidate one service's resolution, or clear all entries of the active instance (or the one given by `instance`) |
 | `export_log_cache` | Export the log cache to a JSON file |
@@ -189,11 +189,13 @@ If the service name has a typo, `query_logs` surfaces close matches (e.g. `Did y
 
 `query_logs` picks the target datasource and label on its own:
 
-1. Filter all datasources down to log types (Loki/ES/CloudWatch/OpenSearch/Splunk).
-2. For each Loki datasource, fetch `/loki/api/v1/labels` and walk common service-label candidates (`service`, `service_name`, `app`, `app_name`, `application`, `container`, `job`) first, then any remaining labels.
+1. List datasources (`/api/datasources`, or `/api/frontend/settings` when the key is denied) and filter down to log types (Loki/ES/CloudWatch/OpenSearch/Splunk).
+2. For each Loki datasource, fetch `/loki/api/v1/labels` and walk common service-label candidates (`service`, `service_name`, `app`, `app_name`, `application`, `container`, `job`) first, then any remaining labels. A datasource whose label API fails is skipped; if nothing matches, the error names the skipped datasources.
 3. For each candidate label, fetch its values and check whether the requested `service` name is in that list.
 4. If exactly one `(datasource, label)` pair matches, use it. If multiple match, require `datasource_uid` to disambiguate. If none match, return close-name suggestions.
 5. The resolved `(service → ds_uid, label)` is cached; `refresh: true` or `refresh_log_cache` forces re-detection.
+
+Grafana 8.x works as well: where `/api/datasources/proxy/uid/{uid}` does not exist (Grafana <9.0), Loki label and query requests go through `/api/datasources/proxy/{id}`, with the numeric id looked up from the datasource list. Run `self_test` to see which routes your instance uses.
 
 Auto-detection currently supports Loki only. For Elasticsearch / CloudWatch / Splunk datasources, pass `datasource_uid` and `service_label` explicitly (and expect LogQL-specific filters not to apply).
 

@@ -23,13 +23,37 @@ export interface GrafanaHealth {
 }
 
 export interface GrafanaDataSource {
-  id: number;
+  id?: number;
   uid: string;
   name: string;
   type: string;
   url?: string;
   access?: string;
   isDefault?: boolean;
+}
+
+export type DataSourceListVia = "datasources_api" | "frontend_settings";
+
+export interface DataSourceListResult {
+  sources: GrafanaDataSource[];
+  via: DataSourceListVia;
+}
+
+export type ProxyRoute = "uid" | "id";
+
+export interface FrontendSettingsDataSource {
+  id?: number;
+  uid?: string;
+  name?: string;
+  type?: string;
+  url?: string;
+  access?: string;
+  isDefault?: boolean;
+  meta?: { builtIn?: boolean };
+}
+
+export interface FrontendSettings {
+  datasources?: Record<string, FrontendSettingsDataSource>;
 }
 
 export interface GrafanaDashboardSearchHit {

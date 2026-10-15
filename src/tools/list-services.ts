@@ -2,7 +2,7 @@ import type { GrafanaClient } from "@/grafana-client.js";
 import type { ToolResult } from "@/interfaces/tools.js";
 import type { LogCache } from "@/log-cache.js";
 import { LOG_DATASOURCE_TYPES, SERVICE_LABEL_CANDIDATES, parseTime } from "@/log-backends.js";
-import { fetchLabelValues, fetchLokiLabels } from "@/loki.js";
+import { describeDatasourceFailure, fetchLabelValues, fetchLokiLabels } from "@/loki.js";
 import { isPermissionError, permissionHint } from "@/permission-error.js";
 
 export interface ListServicesArgs {
@@ -56,23 +56,42 @@ export async function handleListServices(
     uid: string;
     label: string;
     services: string[];
+    error?: string;
   }> = [];
 
   for (const ds of lokiSources) {
     if (args.datasource_uid && ds.uid !== args.datasource_uid) continue;
-    const labels = await fetchLokiLabels(client, ds.uid, startMs, endMs, cache);
-    const label = SERVICE_LABEL_CANDIDATES.find((c) => labels.includes(c));
-    if (!label) {
-      out.push({ datasource: ds.name, uid: ds.uid, label: "(none)", services: [] });
-      continue;
+    try {
+      const labels = await fetchLokiLabels(client, ds.uid, startMs, endMs, cache);
+      const label = SERVICE_LABEL_CANDIDATES.find((c) => labels.includes(c));
+      if (!label) {
+        out.push({ datasource: ds.name, uid: ds.uid, label: "(none)", services: [] });
+        continue;
+      }
+      const values = await fetchLabelValues(client, ds.uid, label, startMs, endMs, cache);
+      out.push({
+        datasource: ds.name,
+        uid: ds.uid,
+        label,
+        services: [...values].sort(),
+      });
+    } catch (err) {
+      out.push({
+        datasource: ds.name,
+        uid: ds.uid,
+        label: "(error)",
+        services: [],
+        error: describeDatasourceFailure(ds, err),
+      });
     }
-    const values = await fetchLabelValues(client, ds.uid, label, startMs, endMs, cache);
-    out.push({
-      datasource: ds.name,
-      uid: ds.uid,
-      label,
-      services: [...values].sort(),
-    });
+  }
+
+  if (out.length > 0 && out.every((o) => o.error)) {
+    const summary = out.map((o) => o.error).join("; ");
+    return {
+      content: [{ type: "text", text: `Could not read Loki labels from any datasource: ${summary}` }],
+      isError: true,
+    };
   }
 
   return {
