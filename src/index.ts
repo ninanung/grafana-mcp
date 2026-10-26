@@ -11,6 +11,7 @@ import { LogCache } from "@/log-cache.js";
 import { getToolDefinitions, handleToolCall, prependText } from "@/tools.js";
 import type { ToolResult } from "@/interfaces/tools.js";
 import { logger } from "@/logger.js";
+import { PACKAGE_VERSION } from "@/package-info.js";
 
 let registry: ClientRegistry;
 try {
@@ -23,7 +24,7 @@ const auditLog = new AuditLog();
 const logCache = new LogCache();
 
 const server = new Server(
-  { name: "grafana-mcp", version: "0.1.0" },
+  { name: "grafana-mcp", version: PACKAGE_VERSION },
   { capabilities: { tools: {} } }
 );
 
