@@ -12,6 +12,8 @@ Log datasources, Loki labels, and the mapping from a service name to its hosting
 
 ## Installation & Setup
 
+Requires Node.js 22 or later.
+
 ### 1. Register Grafana instances
 
 Create `~/.grafana-mcp/instances.json` with one or more Grafana URL + credential pairs, named however you like. One instance is enough to start.

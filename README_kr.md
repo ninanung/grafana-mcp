@@ -12,6 +12,8 @@ Grafana API 중 **자연어 기반 로그 조회**에 집중한 부분을 MCP(Mo
 
 ## 설치 및 설정
 
+Node.js 22 이상이 필요합니다.
+
 ### 1. Grafana 인스턴스 등록
 
 `~/.grafana-mcp/instances.json`에 Grafana URL + 인증 정보 쌍을 원하는 이름으로 등록합니다. 처음에는 1개만 있어도 됩니다.
