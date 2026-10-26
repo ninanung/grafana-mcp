@@ -13,6 +13,14 @@
   ],
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ninanung/grafana-mcp.git"
+  },
+  "homepage": "https://github.com/ninanung/grafana-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/ninanung/grafana-mcp/issues"
+  },
   "bin": {
     "grafana-mcp": "dist/cli.js"
   },
